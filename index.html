@@ -1,0 +1,1521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Culture Orbital</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #02030a; }
+  #hud {
+    position: fixed; left: 16px; bottom: 16px; color: #cfd8e6;
+    font: 12px/1.6 ui-monospace, Menlo, monospace; background: rgba(0,0,0,0.45);
+    padding: 10px 14px; border-radius: 6px; pointer-events: none;
+  }
+  #hud b { color: #fff; }
+  #perf {
+    position: fixed; right: 16px; top: 16px; color: #cfd8e6; width: 240px;
+    font: 12px/1.6 ui-monospace, Menlo, monospace; background: rgba(0,0,0,0.45);
+    padding: 10px 14px; border-radius: 6px;
+  }
+  #perf input { width: 100%; }
+  .peer {
+    position: fixed; left: 0; top: 0; color: #ffd59a; pointer-events: none; white-space: nowrap;
+    font: 12px ui-monospace, Menlo, monospace; text-shadow: 0 0 3px #000;
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud"></div>
+<div id="perf">
+  <div id="fps">– fps</div>
+  <div id="stats"></div>
+  <label>LOD detail <span id="lodLabel"></span></label>
+  <input id="lod" type="range" min="1" max="4" step="0.5" value="2">
+</div>
+<script type="module">
+import * as THREE from 'three';
+
+// Units are metres. Everything lives in the ring's frame; the Y axis is the ring axis and the floor is
+// the inside of a cylinder at radius R. "Height" h is measured toward the axis, so a surface point sits
+// at radius R - h. Sea level is h = 0. Across the ring, t = |u| / HW runs from 0 (centreline) to 1 (wall).
+const R = 1e7;                          // 10,000 km
+const C = 2 * Math.PI * R;              // circumference
+const ROOTS = 26;                       // square root tiles around the ring
+const TILE0 = C / ROOTS;                // root tile edge, ~2,417 km; also the ring width
+const W = TILE0, HW = W / 2;
+const WALL = 7e5;                       // 700 km walls
+const BOWL_T = 0.8;                     // the floor curves up into the wall from here outward
+const GRID = 32, MAX_LEVEL = 20, MAX_TILES = 8192;
+const EYE = 1.7, GRAVITY = 9.81;
+const DAY_RATE = 2 * Math.PI / 300;     // the shade turns once every 5 minutes
+
+const clamp = THREE.MathUtils.clamp, smoothstep = THREE.MathUtils.smoothstep, lerp = THREE.MathUtils.lerp;
+const wrapA = a => ((a % C) + C) % C;
+const f1 = x => x.toFixed(1);           // JS number -> GLSL float literal
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));   // full Retina density costs ~40% more pixel work for little gain
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x02030a);
+// The camera never moves from the origin. Its true position is camPos (JS doubles), and the world is
+// drawn relative to it, which keeps GPU numbers small near the viewer.
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.05, 1e8);
+const camPos = new THREE.Vector3();
+
+const stars = (() => {
+  const n = 5000, p = new Float32Array(n * 3), v = new THREE.Vector3();
+  for (let i = 0; i < n; i++) v.randomDirection().multiplyScalar(9e7).toArray(p, i * 3);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  return new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.5, sizeAttenuation: false }));
+})();
+stars.renderOrder = -2;
+scene.add(stars);
+
+// Sky: a sphere around the camera, drawn just after the stars and before everything else, with no depth
+// test. Each pixel runs the atmosphere along its view direction and blends the lit air over the stars.
+const sky = new THREE.Mesh(new THREE.SphereGeometry(4e7, 32, 16), new THREE.ShaderMaterial({
+  uniforms: null, side: THREE.BackSide, depthTest: false, depthWrite: false,
+  blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+}));
+sky.renderOrder = -1;
+sky.frustumCulled = false;
+scene.add(sky);
+scene.add(new THREE.AmbientLight(0x8899cc, 0.2));
+
+// Sun, shade, hull and clouds use plain ring-frame coordinates, shifted by -camPos each frame. At 10^7 m
+// that leaves about a metre of float error, which only shows if you press your face to the hull.
+const farGroup = new THREE.Group();
+scene.add(farGroup);
+
+// --- Day and night ---
+// A sun at the centre lights the whole floor straight down. A half-shell shade around it turns, and the
+// half of the ring behind it is in night. There are no shadow maps: materials scale their direct light by
+// dayFactor(azimuth), which matches what the shade blocks.
+const dayUniforms = { uDayAngle: { value: 0 }, uLocalDay: { value: 1 }, uCamPos: { value: new THREE.Vector3() } };
+const dayFactor = th => smoothstep(Math.cos(th - dayUniforms.uDayAngle.value), -0.06, 0.06);
+const DAY_GLSL = /* glsl */`
+uniform float uDayAngle;
+uniform float uLocalDay;
+varying float vDay;
+float dayFactor(float th) { return smoothstep(-0.06, 0.06, cos(th - uDayAngle)); }
+
+// --- Atmosphere ---
+// Air sits between the walls with an 8 km scale height. For a ray from the camera to camera + rel, add up
+// the air along it (optical depth) and how much of that air is sunlit. Samples cluster at both ends of
+// the ray, where the air is: across the ring, the middle of a ray is in space.
+uniform vec3 uCamPos;
+const float ATM_H = 8000.0, ATM_BETA = 1.0 / 90000.0;   // optical depth 1 per 90 km of sea-level air
+const vec3 ATM_EXT = vec3(0.55, 0.85, 1.6);             // blue scatters most
+const vec3 ATM_SKY = vec3(0.30, 0.52, 1.0);             // colour of fully lit air
+void atmosphere(vec3 rel, int n, out vec3 trans, out vec3 inscat) {
+  float tau = 0.0, lit = 0.0;
+  for (int k = 0; k < 16; k++) {
+    if (k >= n) break;
+    float x = (float(k) + 0.5) / float(n);
+    float y = 2.0 * min(x, 1.0 - x), w = 4.0 * y * y * y;   // w = ds/dx
+    float s = x < 0.5 ? 0.5 * y * y * y * y : 1.0 - 0.5 * y * y * y * y;
+    vec3 p = uCamPos + rel * s;
+    float alt = ${f1(R)} - length(p.xz);
+    float dens = (abs(p.y) < ${f1(HW)} && alt > -4000.0) ? exp(-max(alt, 0.0) / ATM_H) : 0.0;
+    tau += dens * w;
+    lit += dens * w * dayFactor(atan(p.z, p.x));
+  }
+  float scale = length(rel) * ATM_BETA / float(n);
+  tau *= scale; lit *= scale;
+  trans = exp(-tau * ATM_EXT);
+  inscat = ATM_SKY * (1.0 - trans) * (tau > 0.0 ? lit / tau : 0.0);
+}`;
+// mode 'tile': the tile code sets vDay. 'ring': from the ring-frame vertex position. 'local': one value
+// for small things near the camera (ship, shrubs).
+function patchDay(shader, mode) {
+  Object.assign(shader.uniforms, dayUniforms);
+  shader.vertexShader = DAY_GLSL + '\nvarying vec3 vAtmT;\nvarying vec3 vAtmI;\n' + shader.vertexShader;
+  if (mode === 'ring') shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
+    vec4 ringP = vec4(transformed, 1.0);
+    #ifdef USE_INSTANCING
+      ringP = instanceMatrix * ringP;
+    #endif
+    vDay = dayFactor(atan(ringP.z, ringP.x));
+    atmosphere(ringP.xyz - uCamPos, 6, vAtmT, vAtmI);`);
+  if (mode === 'local') shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvDay = uLocalDay;');
+  shader.fragmentShader = 'varying float vDay;\n' + shader.fragmentShader.replace('#include <lights_fragment_end>',
+    '#include <lights_fragment_end>\nreflectedLight.directDiffuse *= vDay;\nreflectedLight.directSpecular *= vDay;\ntotalEmissiveRadiance *= vDay;' +
+    // Daytime sky light: the sun is always overhead, so without this every wall and cliff side is black.
+    '\nreflectedLight.indirectDiffuse += diffuseColor.rgb * vec3(0.30, 0.38, 0.50) * vDay;');
+  // Haze: things far away (through air) fade toward the sky colour. Ship and shrubs are too close to need it.
+  if (mode !== 'local') shader.fragmentShader = 'varying vec3 vAtmT;\nvarying vec3 vAtmI;\n' + shader.fragmentShader.replace(
+    '#include <tonemapping_fragment>', 'gl_FragColor.rgb = gl_FragColor.rgb * vAtmT + vAtmI;\n#include <tonemapping_fragment>');
+}
+const withDay = (mat, mode) => { mat.onBeforeCompile = s => patchDay(s, mode); return mat; };
+
+sky.material.uniforms = dayUniforms;
+sky.material.vertexShader = /* glsl */`
+  varying vec3 vDir;
+  void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+sky.material.fragmentShader = DAY_GLSL + /* glsl */`
+  varying vec3 vDir;
+  void main() {
+    vec3 trans, inscat;
+    atmosphere(normalize(vDir) * 2.5e7, 10, trans, inscat);   // long enough to cross the ring
+    // Bright air hides the stars (the eye adapts to it); dark air on the night side leaves them visible.
+    gl_FragColor = vec4(inscat, clamp(dot(inscat, vec3(0.333)) * 8.0, 0.0, 1.0));
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }`;
+
+const sunLight = new THREE.PointLight(0xfff4e0, 2.1, 0, 0); // no falloff: equal light everywhere
+farGroup.add(sunLight);
+farGroup.add(new THREE.Mesh(new THREE.SphereGeometry(8e4, 32, 16), new THREE.MeshBasicMaterial({ color: 0xfff2c0 })));
+// Half sphere covering azimuths [-ρ, π - ρ] for rotation.y = ρ; rotated each frame to sit opposite the day side.
+const shade = new THREE.Mesh(
+  new THREE.SphereGeometry(1.2e5, 48, 24, 0, Math.PI),
+  new THREE.MeshStandardMaterial({ color: 0x14161c, metalness: 0.8, roughness: 0.4, side: THREE.DoubleSide })
+);
+farGroup.add(shade);
+
+// --- Terrain noise ---
+// Gradient noise on an integer lattice over (arc length a, across u). Octave i has 32·2^i cells per
+// root tile, so lattice coordinates are exact integers derived from tile indices on the GPU, and the
+// lattice wraps cleanly around the ring. heightAt() in JS computes the same thing for the ship and walker.
+const TERRAIN_VERT = /* glsl */`
+attribute uvec3 aIdx;    // tile index along the ring, across the ring, level
+attribute vec4 aCenter;  // tile centre minus camera (xyz), tile centre angle (w)
+varying float vH;        // height
+varying float vT;        // across-ring position, 0 centre to 1 wall
+varying float vN;        // base noise, for vegetation patches
+varying float vD;        // fine noise relative to the tile, for ragged colour-band edges
+varying float vRiver;    // river noise: water where it's near zero
+varying float vLake;     // lake noise: water where it's high
+varying vec3 vUpV;       // local up in view space, for slope
+varying float vFarm;     // farm-region noise
+varying float vUrban;    // 1 inside a settlement, fading at its edge
+varying float vFarmNear; // 1 within a few radii of a settlement
+flat varying uvec2 vFieldBase;  // field lattice: integer origin for this tile...
+varying vec2 vFieldLf;          // ...and position from it, in ~300 m field cells
+uniform vec4 uTowns[64];        // nearest settlements: centre minus camera (xyz), radius (w)
+uniform int uTownCount;
+
+const vec2 GRADS[8] = vec2[8](vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1),
+  vec2(0.7071, 0.7071), vec2(-0.7071, 0.7071), vec2(0.7071, -0.7071), vec2(-0.7071, -0.7071));
+
+uint tHash(uvec2 p, uint seed) {
+  uint h = p.x * 1664525u + p.y * 1013904223u + seed * 2654435761u;
+  h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+  return h;
+}
+float tGrad(uvec2 c, uint seed, vec2 f) { return dot(GRADS[int(tHash(c, seed) & 7u)], f); }
+float tNoise(uvec2 c, vec2 f, uint wrapX, uint seed) {
+  uint x1 = (c.x + 1u) % wrapX;
+  vec2 w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  float n00 = tGrad(c, seed, f);
+  float n10 = tGrad(uvec2(x1, c.y), seed, f - vec2(1, 0));
+  float n01 = tGrad(uvec2(c.x, c.y + 1u), seed, f - vec2(0, 1));
+  float n11 = tGrad(uvec2(x1, c.y + 1u), seed, f - vec2(1, 1));
+  return mix(mix(n00, n10, w.x), mix(n01, n11, w.x), w.y);
+}
+// Position in octave i's lattice as an exact integer origin plus a small float offset.
+// The tile origin in that lattice is idx.xy * 2^(5 + i - level). st is the position inside the tile, 0..1.
+void latticeCoord(uvec3 idx, vec2 st, int i, out uvec2 base, out vec2 lf) {
+  int shift = 5 + i - int(idx.z);
+  if (shift >= 0) {
+    base = idx.xy << uint(shift);
+    lf = st * float(1 << shift);
+  } else {
+    uint rs = uint(-shift);
+    base = idx.xy >> rs;
+    lf = (vec2(idx.xy & ((1u << rs) - 1u)) + st) / float(1u << rs);
+  }
+}
+// Octaves start..oct-1, the first at amplitude 1.
+float tFbm(uvec3 idx, vec2 st, int start, int oct, uint seed) {
+  float amp = 1.0, s = 0.0;
+  for (int i = 0; i < 24; i++) {
+    if (i >= oct) break;
+    if (i < start) continue;
+    uvec2 base; vec2 lf;
+    latticeCoord(idx, st, i, base, lf);
+    vec2 cf = floor(lf);
+    uint wrapX = ${ROOTS * 32}u << uint(i);
+    uvec2 c = uvec2((base.x + uint(cf.x)) % wrapX, base.y + uint(cf.y));
+    s += amp * tNoise(c, lf - cf, wrapX, seed + uint(i));
+    amp *= 0.5;
+  }
+  return s;
+}
+// Where the land strip ends, as t. A sum of whole-number sines so it repeats exactly once per lap.
+float landEdge(float th) { return 0.31 + 0.07 * sin(3.0 * th + 1.3) + 0.05 * sin(7.0 * th + 0.4) + 0.03 * sin(17.0 * th + 2.1); }
+// Each tile gets octaves down to about two of its vertex spacings, so detail appears as you approach.
+float terrainHeight(uvec3 idx, vec2 st, float th, float u, out float n, out float river, out float lake) {
+  int oct = int(idx.z) + 2;
+  float t = abs(u) / ${f1(HW)};
+  float le = landEdge(th);
+  float land = 1.0 - smoothstep(le - 0.09, le + 0.09, t);
+  n = tFbm(idx, st, 0, oct, 0u);
+  float m = tFbm(idx, st, 0, min(oct, 12), 100u);
+  river = abs(tFbm(idx, st, 0, min(oct, 6), 200u));
+  lake = tFbm(idx, st, 0, min(oct, 5), 300u);
+  // Sea floor with islands, which fade out before the bowl.
+  float seaFloor = max(-1500.0 + n * 4500.0 * (1.0 - smoothstep(0.68, 0.78, t)), -3000.0);
+  // Land: rolling ground plus ridged ranges up to ~8 km where the base noise is high. Rivers follow the
+  // zero lines of their noise and lakes its high spots; both flatten the relief into a valley floor at
+  // 150 m and cut a shallow bed for the water.
+  float ridge = max(1.0 - abs(m), 0.0);
+  float relief = abs(m) * 1200.0 + n * 500.0 + ridge * ridge * ridge * 8000.0 * smoothstep(-0.1, 0.4, n);
+  float valley = min(smoothstep(0.0, 0.1, river), 1.0 - smoothstep(0.4, 0.55, lake));
+  float landH = 150.0 + relief * valley - 10.0 * (1.0 - smoothstep(0.005, 0.012, river)) - 10.0 * smoothstep(0.55, 0.6, lake);
+  // The floor curves up into the wall, steepening as it rises.
+  float s = max(t - ${BOWL_T}, 0.0) / ${f1(1 - BOWL_T)};
+  return mix(seaFloor, landH, land) + ${f1(WALL)} * s * s * s;
+}`;
+
+const GRADS = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]];
+function tHash(x, y, seed) {
+  let h = (Math.imul(x, 1664525) + Math.imul(y, 1013904223) + Math.imul(seed, 2654435761)) >>> 0;
+  h ^= h >>> 16; h = Math.imul(h, 0x7feb352d) >>> 0;
+  h ^= h >>> 15; h = Math.imul(h, 0x846ca68b) >>> 0;
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+function tGrad(x, y, seed, fx, fy) { const g = GRADS[tHash(x, y, seed) & 7]; return g[0] * fx + g[1] * fy; }
+function tNoise(cx, cy, fx, fy, wrap, seed) {
+  const x1 = (cx + 1) % wrap, fade = f => f * f * f * (f * (f * 6 - 15) + 10), wx = fade(fx), wy = fade(fy);
+  const n00 = tGrad(cx, cy, seed, fx, fy), n10 = tGrad(x1, cy, seed, fx - 1, fy);
+  const n01 = tGrad(cx, cy + 1, seed, fx, fy - 1), n11 = tGrad(x1, cy + 1, seed, fx - 1, fy - 1);
+  return lerp(lerp(n00, n10, wx), lerp(n01, n11, wx), wy);
+}
+function tFbm(a, u, oct, seed) {
+  let amp = 1, s = 0;
+  for (let i = 0; i < oct; i++) {
+    const cells = 32 * 2 ** i / TILE0, wrap = ROOTS * 32 * 2 ** i;
+    const x = a * cells, y = (u + HW) * cells, cx = Math.floor(x), cy = Math.floor(y);
+    s += amp * tNoise(cx % wrap, cy, x - cx, y - cy, wrap, seed + i);
+    amp *= 0.5;
+  }
+  return s;
+}
+const landEdge = th => 0.31 + 0.07 * Math.sin(3 * th + 1.3) + 0.05 * Math.sin(7 * th + 0.4) + 0.03 * Math.sin(17 * th + 2.1);
+const bowlH = u => WALL * (Math.max(Math.abs(u) / HW - BOWL_T, 0) / (1 - BOWL_T)) ** 3;
+// Returns [height, wet]; wet is true on rivers and lakes.
+function terrainAt(a, u) {
+  const oct = MAX_LEVEL + 2, t = Math.abs(u) / HW, le = landEdge(a / R);
+  const land = 1 - smoothstep(t, le - 0.09, le + 0.09);
+  const n = tFbm(a, u, oct, 0), m = tFbm(a, u, Math.min(oct, 12), 100);
+  const river = Math.abs(tFbm(a, u, Math.min(oct, 6), 200)), lake = tFbm(a, u, Math.min(oct, 5), 300);
+  const seaFloor = Math.max(-1500 + n * 4500 * (1 - smoothstep(t, 0.68, 0.78)), -3000);
+  const ridge = Math.max(1 - Math.abs(m), 0);
+  const relief = Math.abs(m) * 1200 + n * 500 + ridge ** 3 * 8000 * smoothstep(n, -0.1, 0.4);
+  const valley = Math.min(smoothstep(river, 0, 0.1), 1 - smoothstep(lake, 0.4, 0.55));
+  const landH = 150 + relief * valley - 10 * (1 - smoothstep(river, 0.005, 0.012)) - 10 * smoothstep(lake, 0.55, 0.6);
+  return [lerp(seaFloor, landH, land) + bowlH(u), land > 0.5 && (river < 0.0075 || lake > 0.57)];
+}
+const heightAt = (a, u) => terrainAt(a, u)[0];
+// Cold rises toward the walls; colour and vegetation treat cold ground as if it were higher.
+const coldAt = u => smoothstep(Math.abs(u) / HW, 0.35, 0.78);
+
+// --- Terrain and water materials ---
+const srgb = (r, g, b) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+const PALETTE = {
+  uSeabed: srgb(0.5, 0.47, 0.36), uSand: srgb(0.86, 0.79, 0.56), uGrass: srgb(0.36, 0.58, 0.22),
+  uForest: srgb(0.14, 0.33, 0.13), uTundra: srgb(0.47, 0.44, 0.33), uRock: srgb(0.46, 0.43, 0.39),
+  uSnow: srgb(0.95, 0.96, 0.98), uIce: srgb(0.82, 0.88, 0.93), uRiver: srgb(0.12, 0.33, 0.45),
+};
+
+// Both materials draw the same tiles. Water skips the noise and sits at h = 0.
+// flatShading makes three derive normals from screen-space derivatives, so no neighbour heights are needed.
+function patchTiles(shader) {
+  patchDay(shader, 'tile');
+  for (const [k, v] of Object.entries(PALETTE)) shader.uniforms[k] = { value: v };
+  Object.assign(shader.uniforms, townUniforms);
+  // Positions are built relative to the tile centre: with D the angle from the centre, the offset
+  // along the outward radius is -R·(1 - cos D) - h·cos(D) and along the tangent (R - h)·sin(D).
+  // Both stay accurate in float32, unlike subtracting two 10^7 m positions.
+  // Skirt vertices (position.z = 1) drop below the surface to hide cracks between levels.
+  shader.vertexShader = TERRAIN_VERT + '\n' + shader.vertexShader.replace('#include <begin_vertex>', /* glsl */`
+    float size = ${f1(TILE0)} / float(1u << aIdx.z);
+    float da = (position.x - 0.5) * size, du = (position.y - 0.5) * size;
+    // Taylor series instead of sin/cos: GPU trig has a fixed absolute error (~1e-6), which times
+    // R = 10^7 m is metres of jitter. D is at most ~0.12 (half a root tile), so these terms are plenty.
+    float D = da / ${f1(R)}, D2 = D * D;
+    float sinD = D * (1.0 - D2 / 6.0 * (1.0 - D2 / 20.0));
+    float omc = 0.5 * D2 * (1.0 - D2 / 12.0 * (1.0 - D2 / 30.0));   // 1 - cos(D)
+    float tTheta = aCenter.w + D;
+    float tU = -${f1(HW)} + (float(aIdx.y) + position.y) * size;
+    float tN = 0.0, tR = 1.0, tL = 0.0;
+    #ifdef WATER
+      float h = 0.0;   // flat, so no skirt: it would show through the transparent water
+      vD = 0.0;
+    #else
+      float h = terrainHeight(aIdx, position.xy, tTheta, tU, tN, tR, tL) - position.z * size * 0.05;
+      vD = tFbm(aIdx, position.xy, max(int(aIdx.z) - 3, 0), int(aIdx.z) + 2, 400u);
+      vFarm = tFbm(aIdx, position.xy, 0, min(int(aIdx.z) + 2, 4), 500u);
+      latticeCoord(aIdx, position.xy, 8, vFieldBase, vFieldLf);   // octave 8: 295 m cells
+    #endif
+    vH = h; vT = abs(tU) / ${f1(HW)}; vN = tN; vRiver = tR; vLake = tL;
+    vDay = dayFactor(tTheta);
+    float outward = -${f1(R)} * omc - h * (1.0 - omc);
+    float along = ${f1(R)} * sinD - h * sinD;
+    vec3 er = vec3(cos(aCenter.w), 0.0, sin(aCenter.w)), et = vec3(-er.z, 0.0, er.x);
+    vec3 transformed = aCenter.xyz + er * outward + et * along + vec3(0.0, du, 0.0);
+    vUpV = (viewMatrix * vec4(-er, 0.0)).xyz;
+    #ifdef DECK
+      // GSV deck: the same tile laid flat in the plane through its centre (er, et are the GSV's axes,
+      // since aCenter.w is its angle). Heights shrink to DECK_SCALE and flatten toward the deck's edge;
+      // colours use heights squeezed to 0.3 above the 150 m lowland, so only top ridges reach snow. lx, ly: from the deck centre.
+      float dk = float(1u << (aIdx.z - 8u));
+      float lx = (float(aIdx.x) - ${DECK_K0}.0 * dk + position.x) * size - ${f1(DECK_L / 2)};
+      float ly = (float(aIdx.y) - ${DECK_KU}.0 * dk + position.y) * size - ${f1(DECK_W / 2)};
+      float fall = smoothstep(0.0, 1500.0, min(${f1(DECK_L / 2)} - abs(lx), ${f1(DECK_W / 2)} - abs(ly)));
+      vH = 150.0 + 0.3 * (h - 150.0) * fall;
+      transformed = aCenter.xyz + et * da + vec3(0.0, du, 0.0) - er * (${DECK_SCALE} * h * fall);
+    #endif
+    #ifndef WATER
+      float urban = 0.0, near = 0.0;
+      for (int i = 0; i < 64; i++) {
+        if (i >= uTownCount) break;
+        float d = distance(transformed, uTowns[i].xyz), r = uTowns[i].w;
+        urban = max(urban, 1.0 - smoothstep(0.55 * r, r, d));
+        near = max(near, 1.0 - smoothstep(r, 2.5 * r, d));
+      }
+      vUrban = urban; vFarmNear = near;
+    #endif
+    atmosphere(transformed, 6, vAtmT, vAtmI);`);
+  shader.fragmentShader = /* glsl */`
+    varying float vH;
+    varying float vT;
+    varying float vN;
+    varying float vD;
+    varying float vRiver;
+    varying float vLake;
+    varying vec3 vUpV;
+    varying float vFarm;
+    varying float vUrban;
+    varying float vFarmNear;
+    flat varying uvec2 vFieldBase;
+    varying vec2 vFieldLf;
+    uniform vec3 ${Object.keys(PALETTE).join(', ')};
+    uint tHash(uvec2 p, uint seed) {
+      uint h = p.x * 1664525u + p.y * 1013904223u + seed * 2654435761u;
+      h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+      return h;
+    }
+    const vec3 CROPS[4] = vec3[4](vec3(0.62, 0.55, 0.18), vec3(0.30, 0.45, 0.10), vec3(0.40, 0.28, 0.15), vec3(0.45, 0.55, 0.15));
+    const vec3 ROOFS[4] = vec3[4](vec3(0.55, 0.55, 0.56), vec3(0.50, 0.42, 0.36), vec3(0.36, 0.37, 0.40), vec3(0.66, 0.64, 0.60));
+    // A grid pattern over lattice cells: per-cell colour from the palette, darker lines along cell edges.
+    // Fades to the palette average once a cell is only a few pixels across, so it never shimmers.
+    vec3 cellPattern(float scale, uint seed, const vec3 pal[4], vec3 lineCol, float lineW, out float onLine, out uint hc) {
+      vec2 lf = vFieldLf * scale, cf = floor(lf), f = lf - cf;
+      hc = tHash(vFieldBase * uint(scale) + uvec2(cf), seed);
+      float edge = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+      onLine = 1.0 - smoothstep(lineW, lineW * 1.6, edge);
+      vec3 c = mix(pal[hc & 3u] * (0.85 + 0.3 * float((hc >> 8) & 15u) / 15.0), lineCol, onLine);
+      float aa = clamp(1.0 - length(fwidth(lf)) * 3.0, 0.0, 1.0);
+      return mix(mix((pal[0] + pal[1] + pal[2] + pal[3]) * 0.25, lineCol, lineW * 2.0), c, aa);
+    }
+    // Bands blend over a few hundred metres. Coarse and fine noise wobble their heights so edges look ragged
+    // at any distance, and steep slopes show bare rock. slope is 1 on flat ground, 0 on a cliff.
+    vec3 cityGlow = vec3(0.0);
+    vec3 terrainColor(float h, float t, float n, float d, float slope) {
+      float cold = smoothstep(0.35, 0.78, t);
+      float e = h + cold * 3500.0 + n * 400.0 + d * 350.0;   // colder ground reads as higher
+      vec3 c = mix(uGrass, uForest, smoothstep(-0.1, 0.2, n + d * 0.15));
+      c = mix(c, uTundra, smoothstep(1900.0, 2100.0, e));
+      c = mix(c, uRock, smoothstep(2700.0, 2900.0, e));
+      c = mix(c, uSnow, smoothstep(3700.0, 3900.0, e));
+      float cliff = (1.0 - smoothstep(0.55, 0.8, slope + d * 0.1)) * smoothstep(40.0, 120.0, h) * (1.0 - smoothstep(0.76, 0.8, t));
+      c = mix(c, uRock, cliff);
+      c = mix(c, uSand, (1.0 - smoothstep(20.0, 60.0, h + d * 30.0)) * (1.0 - smoothstep(0.4, 0.6, cold)));
+      c = mix(c, uSeabed, 1.0 - smoothstep(-30.0, -5.0, h));
+      // Rivers and lakes on land, frozen where it's cold.
+      float wet = max(1.0 - smoothstep(0.0065, 0.0085, vRiver), smoothstep(0.565, 0.575, vLake));
+      wet *= step(1.0, h) * (1.0 - smoothstep(0.76, 0.8, t));
+      // Farmland and settlements need warm, flat, dry lowland.
+      float settle = smoothstep(10.0, 30.0, h) * (1.0 - smoothstep(1200.0, 1500.0, h)) * (1.0 - smoothstep(0.25, 0.4, cold))
+                   * smoothstep(0.93, 0.98, slope) * (1.0 - wet);
+      float onLine; uint hc;
+      float farm = max(smoothstep(0.3, 0.4, vFarm), vFarmNear) * settle;
+      c = mix(c, cellPattern(1.0, 600u, CROPS, vec3(0.16, 0.30, 0.12), 0.03, onLine, hc), farm);
+      float urban = vUrban * settle;
+      c = mix(c, cellPattern(6.0, 700u, ROOFS, vec3(0.22, 0.22, 0.24), 0.08, onLine, hc), urban);
+      // Night lights: streets and some blocks glow warm on the night side.
+      cityGlow = vec3(1.0, 0.72, 0.38) * urban * (onLine * 0.9 + float((hc >> 12) & 3u) * 0.12) * 0.6;
+      return mix(c, mix(uRiver, uIce, smoothstep(0.3, 0.55, cold)), wet);
+    }\n` + shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+    #ifdef WATER
+      float ice = smoothstep(0.66, 0.76, vT);   // the sea freezes near the walls
+      diffuseColor.rgb = mix(diffuseColor.rgb, uIce, ice);
+      diffuseColor.a = mix(diffuseColor.a, 1.0, ice);
+    #else
+      vec3 faceN = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
+      diffuseColor.rgb *= terrainColor(vH, vT, vN, vD, abs(dot(faceN, normalize(vUpV))));
+    #endif`).replace('#include <opaque_fragment>', '#ifndef WATER\noutgoingLight += cityGlow * (1.0 - vDay);\n#endif\n#include <opaque_fragment>');
+}
+const terrainMat = new THREE.MeshStandardMaterial({ roughness: 0.9, side: THREE.DoubleSide, flatShading: true });
+terrainMat.onBeforeCompile = patchTiles;
+const waterMat = new THREE.MeshStandardMaterial({ color: 0x1d5f8a, transparent: true, opacity: 0.85, roughness: 0.15, metalness: 0.2, side: THREE.DoubleSide, flatShading: true });
+waterMat.defines = { WATER: '' };
+waterMat.onBeforeCompile = patchTiles;
+
+// --- Quadtree tiles ---
+// The band unrolls to an (a, u) rectangle cut into ROOTS square root tiles. A tile splits into four while
+// the camera is closer than lodDetail × its size. Every tile draws the same GRID×GRID mesh by instancing.
+let lodDetail = 2;
+const tileGeo = new THREE.InstancedBufferGeometry();
+{
+  // (s, t) in [0, 1] across the tile. The outer ring of vertices repeats the edge with z = 1 to form the skirt.
+  const n = GRID + 3, pos = new Float32Array(n * n * 3), idx = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const p = (i * n + j) * 3;
+    pos[p] = clamp((i - 1) / GRID, 0, 1);
+    pos[p + 1] = clamp((j - 1) / GRID, 0, 1);
+    pos[p + 2] = (i === 0 || j === 0 || i === n - 1 || j === n - 1) ? 1 : 0;
+  }
+  for (let i = 0; i < n - 1; i++) for (let j = 0; j < n - 1; j++) {
+    const a = i * n + j, b = a + n;
+    idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  tileGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  tileGeo.setIndex(idx);
+}
+const idxAttr = new THREE.InstancedBufferAttribute(new Uint32Array(MAX_TILES * 3), 3).setUsage(THREE.DynamicDrawUsage);
+const centerAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_TILES * 4), 4).setUsage(THREE.DynamicDrawUsage);
+tileGeo.setAttribute('aIdx', idxAttr);
+tileGeo.setAttribute('aCenter', centerAttr);
+for (const mat of [terrainMat, waterMat]) {
+  const mesh = new THREE.Mesh(tileGeo, mat);
+  mesh.frustumCulled = false; // tiles are culled individually below
+  scene.add(mesh);
+}
+
+const frustum = new THREE.Frustum(), sphere = new THREE.Sphere(), projM = new THREE.Matrix4();
+let tileCount = 0, deepest = 0, camA = 0, camR = R;
+
+function updateTiles() {
+  projM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  frustum.setFromProjectionMatrix(projM);
+  camA = wrapA(Math.atan2(camPos.z, camPos.x) * R);
+  camR = Math.hypot(camPos.x, camPos.z);
+  tileCount = 0; deepest = 0;
+  for (let i = 0; i < ROOTS; i++) visit(i, 0, 0);
+  tileGeo.instanceCount = tileCount;
+  idxAttr.needsUpdate = true;
+  centerAttr.needsUpdate = true;
+}
+
+function visit(ka, ku, level) {
+  const size = TILE0 / 2 ** level;
+  const ac = (ka + 0.5) * size, uc = -HW + (ku + 0.5) * size, th = ac / R;
+  const cx = R * Math.cos(th) - camPos.x, cy = uc - camPos.y, cz = R * Math.sin(th) - camPos.z;
+  sphere.center.set(cx, cy, cz);
+  sphere.radius = 0.75 * size + 9000 + bowlH(Math.abs(uc) + size / 2);
+  if (!frustum.intersectsSphere(sphere)) return;
+
+  // Nearest point of the tile to the camera, with arc length wrapped around the ring. Its radius is the
+  // camera's, held within the band the terrain can occupy there, so standing on a mountain still refines.
+  let d = camA - ac;
+  d -= Math.round(d / C) * C;
+  const an = (ac + clamp(d, -size / 2, size / 2)) / R;
+  const un = clamp(camPos.y, uc - size / 2, uc + size / 2);
+  const surf = R - bowlH(un), pr = clamp(camR, surf - 9000, surf + 3500);
+  const dist = Math.hypot(camPos.x - pr * Math.cos(an), camPos.y - un, camPos.z - pr * Math.sin(an));
+
+  if (level < MAX_LEVEL && dist < size * lodDetail) {
+    visit(2 * ka, 2 * ku, level + 1);
+    visit(2 * ka + 1, 2 * ku, level + 1);
+    visit(2 * ka, 2 * ku + 1, level + 1);
+    visit(2 * ka + 1, 2 * ku + 1, level + 1);
+  } else if (tileCount < MAX_TILES) {
+    idxAttr.array.set([ka, ku, level], tileCount * 3);
+    centerAttr.array.set([cx, cy, cz, th], tileCount * 4);
+    tileCount++;
+    deepest = Math.max(deepest, level);
+  }
+}
+
+const lodInput = document.getElementById('lod'), lodLabel = document.getElementById('lodLabel');
+lodInput.addEventListener('input', () => { lodDetail = +lodInput.value; lodLabel.textContent = lodDetail; });
+lodLabel.textContent = lodDetail;
+
+// --- Hull: the outer shell and wall rims, lathed around the axis. Profile points are (radius, y). ---
+// Inside, the terrain's bowl rises to meet the rim, so the inner wall faces sit hidden behind it.
+{
+  const T = 2e4, BASE = R + 5e3, BULGE = 3e5, pts = [];
+  const P = (r, y) => pts.push(new THREE.Vector2(r, y));
+  P(R - WALL, HW); P(R - WALL, HW + T); P(BASE, HW + T);
+  for (let k = 1; k < 24; k++) {
+    const phi = (k / 24) * Math.PI;
+    P(BASE + BULGE * Math.sin(phi), (HW + T) * Math.cos(phi));
+  }
+  P(BASE, -HW - T); P(R - WALL, -HW - T); P(R - WALL, -HW);
+  P(R + 3500, -HW); P(R + 3500, HW); P(R - WALL, HW);
+  const hull = new THREE.Mesh(
+    new THREE.LatheGeometry(pts, 2048),
+    withDay(new THREE.MeshStandardMaterial({ color: 0x8a8f99, metalness: 0.6, roughness: 0.45, flatShading: true, side: THREE.DoubleSide }), 'ring')
+  );
+  hull.frustumCulled = false;
+  farGroup.add(hull);
+}
+
+// --- Clouds: clusters of flattened puffs, 2–5 km up, kept clear of the bowl ---
+{
+  const CLOUDS = 4000, PUFFS = 4;
+  const mesh = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(1, 1),
+    // Smooth shading, a faint glow so undersides stay light grey, and no depth writes so puffs don't cut into each other.
+    withDay(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x6a7078, roughness: 1, transparent: true, opacity: 0.85, depthWrite: false }), 'ring'),
+    CLOUDS * PUFFS
+  );
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), v = new THREE.Vector3();
+  const yAxis = new THREE.Vector3(0, 1, 0), inward = new THREE.Vector3();
+  let n = 0;
+  for (let i = 0; i < CLOUDS; i++) {
+    const theta = Math.random() * Math.PI * 2, u = (Math.random() * 2 - 1) * HW * 0.7;
+    const alt = 2000 + Math.random() * 3000;
+    for (let k = 0; k < PUFFS; k++) {
+      const th = theta + (Math.random() - 0.5) * 3e4 / R, uu = u + (Math.random() - 0.5) * 3e4, r = R - alt - Math.random() * 500;
+      inward.set(-Math.cos(th), 0, -Math.sin(th));
+      q.setFromUnitVectors(yAxis, inward);
+      v.set(r * Math.cos(th), uu, r * Math.sin(th));
+      s.set(8e3 + Math.random() * 15e3, 600 + Math.random() * 600, 6e3 + Math.random() * 12e3);
+      mesh.setMatrixAt(n++, m.compose(v, q, s));
+    }
+  }
+  mesh.frustumCulled = false;
+  farGroup.add(mesh);
+}
+
+// Ring-frame point at arc length a, across u, height h above sea level.
+const ringPoint = (a, u, h, out) => out.set((R - h) * Math.cos(a / R), u, (R - h) * Math.sin(a / R));
+
+// --- Settlements ---
+// Three tiers on hashed grids. Each grid cell may hold one settlement, kept only on warm, dry, flat lowland.
+// Cells are evaluated once and cached. The nearest 64 go to the terrain shader each frame for ground
+// patterns, farmland rings and night lights; buildings are scattered near the camera.
+const TIERS = [
+  { cell: 2e5, chance: 0.6, rMin: 3000, rMax: 7000, range: 5e5, seed: 900 },  // cities
+  { cell: 4e4, chance: 0.5, rMin: 700, rMax: 1800, range: 1.5e5, seed: 901 }, // towns
+  { cell: 8e3, chance: 0.45, rMin: 150, rMax: 400, range: 4e4, seed: 902 },   // villages
+];
+const townUniforms = { uTowns: { value: Array.from({ length: 64 }, () => new THREE.Vector4()) }, uTownCount: { value: 0 } };
+const settleCache = new Map();
+const arcDelta = (a, b) => { let d = a - b; return d - Math.round(d / C) * C; };
+
+function settlementInCell(ti, ci, cj) {
+  const key = ti + ',' + ci + ',' + cj;
+  if (settleCache.has(key)) return settleCache.get(key);
+  const T = TIERS[ti];
+  let s = null;
+  // Up to four tries at a random spot in the cell; the first suitable one wins.
+  for (let k = 0; k < 4 && !s && (tHash(ci, cj, T.seed) & 1023) / 1024 < T.chance; k++) {
+    const h = tHash(ci, cj, T.seed + 17 * k);
+    const a = wrapA((ci + ((h >>> 10) & 1023) / 1024) * T.cell), u = (cj + ((h >>> 20) & 1023) / 1024) * T.cell;
+    const r = T.rMin + (T.rMax - T.rMin) * ((h >>> 4) & 63) / 63;
+    if (Math.abs(u) > HW * 0.6 || coldAt(u) > 0.25) continue;
+    const [g, wet] = terrainAt(a, u);
+    if (wet || g < 20 || g > 1200) continue;
+    if (Math.abs(heightAt(a + r, u) - g) + Math.abs(heightAt(a, u + r) - g) < Math.max(80, r * 0.04)) s = { a, u, h: g, r, tier: ti };
+  }
+  settleCache.set(key, s);
+  return s;
+}
+
+// Settlements of every tier within each tier's range of (a, u), or within `range` if given.
+function settlementsNear(a, u, range) {
+  const out = [];
+  TIERS.forEach((T, ti) => {
+    const R0 = range ?? T.range, n = Math.ceil(R0 / T.cell) + 1;
+    const ci0 = Math.floor(a / T.cell), cj0 = Math.floor(u / T.cell), N = Math.floor(C / T.cell);
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+      const s = settlementInCell(ti, ((ci0 + i) % N + N) % N, cj0 + j);
+      if (s && Math.hypot(arcDelta(s.a, a), s.u - u) < R0 + s.r) out.push(s);
+    }
+  });
+  return out;
+}
+
+const tmpV = new THREE.Vector3();
+let nearTowns = [];
+function updateTowns() {
+  const a = wrapA(Math.atan2(camPos.z, camPos.x) * R), u = camPos.y;
+  nearTowns = settlementsNear(a, u);
+  for (const s of nearTowns) s.dist = Math.hypot(arcDelta(s.a, a), s.u - u);
+  nearTowns.sort((x, y) => x.dist - y.dist);
+  const list = townUniforms.uTowns.value, n = Math.min(nearTowns.length, 64);
+  for (let i = 0; i < n; i++) {
+    const s = nearTowns[i];
+    ringPoint(s.a, s.u, s.h, tmpV).sub(camPos);
+    list[i].set(tmpV.x, tmpV.y, tmpV.z, s.r);
+  }
+  townUniforms.uTownCount.value = n;
+}
+const inTown = (a, u) => nearTowns.some(s => Math.hypot(arcDelta(s.a, a), s.u - u) < s.r * 1.2);
+
+// --- Shrubs: scattered on warm land near the camera ---
+// The ground near the camera is cut into CHUNK-metre squares. Each square gets a fixed set of shrubs from
+// a hash of its index, placed with heightAt(). Instance matrices are stored relative to shrubOrigin, a
+// point near the camera, so they stay small enough for float32.
+const CHUNK = 64, CELL = 4, CHUNK_RADIUS = 3, MAX_SHRUBS = 30000, SHRUB_ALT = 400;
+const NCHUNK_A = Math.floor(C / CHUNK);
+const shrubMesh = new THREE.InstancedMesh(
+  new THREE.IcosahedronGeometry(1, 0),
+  withDay(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), 'local'),
+  MAX_SHRUBS
+);
+shrubMesh.frustumCulled = false;
+shrubMesh.count = 0;
+scene.add(shrubMesh);
+const chunks = new Map();   // "ia,iu" -> array of shrubs {a, u, h, sx, sy, sz, rot, shade}
+const shrubOrigin = new THREE.Vector3();
+let shrubsDirty = false;
+
+function makeChunk(ia, iu) {
+  const list = [], per = CHUNK / CELL;
+  for (let i = 0; i < per; i++) for (let j = 0; j < per; j++) {
+    const hsh = tHash(ia * per + i, iu * per + j + 1e6, 777);
+    if ((hsh & 255) > 90) continue;                 // ~35% of cells
+    const a = (ia * per + i + ((hsh >>> 8) & 255) / 256) * CELL;
+    const u = (iu * per + j + ((hsh >>> 16) & 255) / 256) * CELL;
+    if (Math.abs(u) > HW * BOWL_T) continue;
+    const [h, wet] = terrainAt(a, u);
+    if (wet || inTown(a, u) || h < 40 || h + coldAt(u) * 3500 > 2000) continue;   // warm land only
+    const k = ((hsh >>> 24) & 255) / 255;
+    list.push({ a, u, h, sx: 1 + k * 1.8, sy: 0.6 + k * 1.2, sz: 1 + (1 - k) * 1.5, rot: k * 6.28, shade: 0.8 + 0.4 * ((hsh >>> 4) & 15) / 15 });
+  }
+  return list;
+}
+
+function updateShrubs() {
+  const a = wrapA(Math.atan2(camPos.z, camPos.x) * R), u = camPos.y;
+  const nearGround = R - camR - Math.max(heightAt(a, u), 0) < SHRUB_ALT;
+  const ca = Math.floor(a / CHUNK), cu = Math.floor(u / CHUNK);
+  // Drop chunks that are out of range (or all of them when high up).
+  for (const [key, c] of chunks) {
+    if (!nearGround || Math.abs(c.da(ca)) > CHUNK_RADIUS + 1 || Math.abs(c.iu - cu) > CHUNK_RADIUS + 1) { chunks.delete(key); shrubsDirty = true; }
+  }
+  if (nearGround) {
+    let budget = 3;  // chunks generated per frame, nearest first
+    for (let r = 0; r <= CHUNK_RADIUS && budget > 0; r++) {
+      for (let i = -r; i <= r && budget > 0; i++) for (let j = -r; j <= r && budget > 0; j++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
+        const ia = ((ca + i) % NCHUNK_A + NCHUNK_A) % NCHUNK_A, iu = cu + j, key = ia + ',' + iu;
+        if (chunks.has(key)) continue;
+        chunks.set(key, { iu, list: makeChunk(ia, iu), da: c => { let d = ia - c; d -= Math.round(d / NCHUNK_A) * NCHUNK_A; return d; } });
+        shrubsDirty = true; budget--;
+      }
+    }
+  }
+  if (shrubsDirty) rebuildShrubs(a, u);
+  shrubMesh.position.copy(shrubOrigin).sub(camPos);
+}
+
+const sm = new THREE.Matrix4(), sq = new THREE.Quaternion(), sq2 = new THREE.Quaternion(), ss = new THREE.Vector3(),
+      sp = new THREE.Vector3(), sIn = new THREE.Vector3(), sCol = new THREE.Color(), Yv = new THREE.Vector3(0, 1, 0);
+const SHRUB_GREEN = srgb(0.26, 0.5, 0.17);
+function rebuildShrubs(a, u) {
+  ringPoint(a, u, 0, shrubOrigin);
+  let n = 0;
+  for (const c of chunks.values()) for (const s of c.list) {
+    if (n >= MAX_SHRUBS) break;
+    ringPoint(s.a, s.u, s.h - 0.3, sp).sub(shrubOrigin);   // sink slightly so LOD differences don't float them
+    const th = s.a / R;
+    sIn.set(-Math.cos(th), 0, -Math.sin(th));
+    sq.setFromUnitVectors(Yv, sIn).multiply(sq2.setFromAxisAngle(Yv, s.rot));
+    shrubMesh.setMatrixAt(n, sm.compose(sp, sq, ss.set(s.sx, s.sy, s.sz)));
+    shrubMesh.setColorAt(n, sCol.copy(SHRUB_GREEN).multiplyScalar(s.shade));
+    n++;
+  }
+  shrubMesh.count = n;
+  shrubMesh.instanceMatrix.needsUpdate = true;
+  if (shrubMesh.instanceColor) shrubMesh.instanceColor.needsUpdate = true;
+  shrubsDirty = false;
+}
+
+// --- Buildings: boxes in settlements near the camera ---
+// Same scheme as the shrubs, with 1 km chunks. Spacing, footprint and height depend on the tier; city
+// buildings rise toward the centre into towers. Windows glow on the night side.
+const BCHUNK = 1000, BRADIUS = 6, MAX_BUILDINGS = 40000, BUILD_ALT = 30000;
+const NBCHUNK_A = Math.floor(C / BCHUNK);
+const BUILD = [
+  { spacing: 60, fp: [18, 36], density: 0.85, color: srgb(0.74, 0.76, 0.8) },   // city
+  { spacing: 40, fp: [10, 18], density: 0.7, color: srgb(0.8, 0.72, 0.6) },     // town
+  { spacing: 30, fp: [7, 12], density: 0.5, color: srgb(0.85, 0.8, 0.7) },      // village
+];
+const buildingMat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.1, flatShading: true });
+buildingMat.onBeforeCompile = sh => {
+  patchDay(sh, 'local');
+  sh.fragmentShader = sh.fragmentShader.replace('totalEmissiveRadiance *= vDay;',
+    'totalEmissiveRadiance *= vDay;\ntotalEmissiveRadiance += vec3(1.0, 0.75, 0.4) * 0.35 * (1.0 - vDay);');
+};
+const buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), buildingMat, MAX_BUILDINGS);
+buildingMesh.frustumCulled = false;
+buildingMesh.count = 0;
+scene.add(buildingMesh);
+const bChunks = new Map();
+const bOrigin = new THREE.Vector3();
+let bDirty = false;
+
+function makeBuildingChunk(ia, iu) {
+  const a0 = ia * BCHUNK, u0 = iu * BCHUNK, list = [];
+  const towns = settlementsNear(a0 + BCHUNK / 2, u0 + BCHUNK / 2, BCHUNK);
+  for (const s of towns) {
+    const B = BUILD[s.tier], sp = B.spacing;
+    for (let a = Math.ceil(a0 / sp) * sp; a < a0 + BCHUNK; a += sp) for (let u = Math.ceil(u0 / sp) * sp; u < u0 + BCHUNK; u += sp) {
+      const q = Math.hypot(arcDelta(a, s.a), u - s.u) / s.r;
+      if (q > 1) continue;
+      const hsh = tHash(Math.round(a / sp), Math.round(u / sp) + 1e6, 1000 + s.tier);
+      const k1 = (hsh & 1023) / 1023, k2 = ((hsh >>> 10) & 1023) / 1023, k3 = ((hsh >>> 20) & 1023) / 1023;
+      if (k1 > B.density * (1 - q * q)) continue;
+      const [g, wet] = terrainAt(a, u);
+      if (wet || g < 5) continue;
+      const height = s.tier === 0 ? 12 + 300 * (1 - q) ** 3 * k2 * k2 : s.tier === 1 ? 6 + 25 * (1 - q) ** 2 * k2 : 4 + 6 * k2;
+      const fp = B.fp[0] + (B.fp[1] - B.fp[0]) * k3;
+      list.push({ a, u, g, w: fp, d: fp * (0.6 + 0.4 * k2), height, shade: 0.75 + 0.4 * k3, color: B.color });
+    }
+  }
+  return list;
+}
+
+function updateBuildings() {
+  const a = wrapA(Math.atan2(camPos.z, camPos.x) * R), u = camPos.y;
+  const near = R - camR - Math.max(heightAt(a, u), 0) < BUILD_ALT;
+  const ca = Math.floor(a / BCHUNK), cu = Math.floor(u / BCHUNK);
+  for (const [key, c] of bChunks) {
+    let d = c.ia - ca; d -= Math.round(d / NBCHUNK_A) * NBCHUNK_A;
+    if (!near || Math.abs(d) > BRADIUS + 1 || Math.abs(c.iu - cu) > BRADIUS + 1) { bChunks.delete(key); bDirty = true; }
+  }
+  if (near) {
+    let budget = 2;
+    for (let r = 0; r <= BRADIUS && budget > 0; r++) {
+      for (let i = -r; i <= r && budget > 0; i++) for (let j = -r; j <= r && budget > 0; j++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
+        const ia = ((ca + i) % NBCHUNK_A + NBCHUNK_A) % NBCHUNK_A, iu = cu + j, key = ia + ',' + iu;
+        if (bChunks.has(key)) continue;
+        const list = makeBuildingChunk(ia, iu);
+        bChunks.set(key, { ia, iu, list });
+        if (list.length) { bDirty = true; budget--; }
+      }
+    }
+  }
+  if (bDirty) rebuildBuildings(a, u);
+  buildingMesh.position.copy(bOrigin).sub(camPos);
+}
+
+const bm = new THREE.Matrix4(), bq = new THREE.Quaternion(), bs = new THREE.Vector3(), bp = new THREE.Vector3(),
+      bEast = new THREE.Vector3(), bUp = new THREE.Vector3(), bSouth = new THREE.Vector3(), bBasis = new THREE.Matrix4(), bCol = new THREE.Color();
+function rebuildBuildings(a, u) {
+  ringPoint(a, u, 0, bOrigin);
+  let n = 0;
+  for (const c of bChunks.values()) for (const b of c.list) {
+    if (n >= MAX_BUILDINGS) break;
+    const th = b.a / R;
+    ringPoint(b.a, b.u, b.g - 1, bp).sub(bOrigin);   // sunk a metre so slopes don't leave gaps
+    // Aligned with the ring: x east, y toward the axis, z = x × y.
+    bEast.set(-Math.sin(th), 0, Math.cos(th)); bUp.set(-Math.cos(th), 0, -Math.sin(th)); bSouth.crossVectors(bEast, bUp);
+    bq.setFromRotationMatrix(bBasis.makeBasis(bEast, bUp, bSouth));
+    buildingMesh.setMatrixAt(n, bm.compose(bp, bq, bs.set(b.w, b.height, b.d)));
+    buildingMesh.setColorAt(n, bCol.copy(b.color).multiplyScalar(b.shade));
+    n++;
+  }
+  buildingMesh.count = n;
+  buildingMesh.instanceMatrix.needsUpdate = true;
+  if (buildingMesh.instanceColor) buildingMesh.instanceColor.needsUpdate = true;
+  bDirty = false;
+}
+
+// --- Ship, character and camera ---
+// Ship mode: an arcade ship flies where it points, and a chase camera follows it.
+// Walk mode: the character stands on the floor, with "down" pointing away from the axis.
+// Both keep true positions in JS doubles; the ship mesh is drawn at shipPos - camPos.
+const ship = new THREE.Group();
+{
+  const hullMat = withDay(new THREE.MeshStandardMaterial({ color: 0xdfe3ea, metalness: 0.5, roughness: 0.35, flatShading: true }), 'local');
+  const body = new THREE.Mesh(new THREE.ConeGeometry(1.6, 12, 6), hullMat);
+  body.rotation.x = -Math.PI / 2;  // nose toward -Z, like a camera
+  body.scale.z = 0.45;             // flatten (local z ends up vertical)
+  const wings = new THREE.Mesh(new THREE.BoxGeometry(10, 0.25, 3.5), hullMat);
+  wings.position.z = 2.5;
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2, 2.5), hullMat);
+  fin.position.set(0, 1, 4.5);
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 8), new THREE.MeshBasicMaterial({ color: 0x7fd4ff }));
+  glow.position.z = 6.1;
+  glow.name = 'glow';
+  ship.add(body, wings, fin, glow);
+}
+scene.add(ship);
+
+const SHIP_MAX = 2e5, CLEARANCE = 3;
+const shipPos = new THREE.Vector3(), shipQ = new THREE.Quaternion(), camQ = new THREE.Quaternion();
+const CHASE = new THREE.Vector3(0, 6, 25);
+let shipSpeed = 100;
+
+let mode = 'ship', walkSpeed = 5, spinning = true, muted = false;
+const player = { a: 0, u: 0, yaw: 0, pitch: 0, z: 0, vz: 0, deck: false }; // z: height above ground while jumping; deck: on the GSV
+const keys = new Set();
+
+// Orientation whose forward is the local "east" (+a) and up is toward the axis.
+const levelQ = (a, out) => {
+  const th = a / R, m = new THREE.Matrix4();
+  m.makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(-Math.cos(th), 0, -Math.sin(th)), new THREE.Vector3(Math.sin(th), 0, -Math.cos(th)));
+  return out.setFromRotationMatrix(m);
+};
+
+// --- GSV ---
+// A General Systems Vehicle parked inside the ring: a ~48 x 10 x 2 km slab hovering 15 km over the land
+// strip, long axis east-west. Lit windows and docking bays down the sides, open landing bays cut into the
+// underside. Built in its own frame (-Z east, +Y toward the axis, like levelQ) and drawn at gsvPos - camPos,
+// like the ship. X switches it off and on.
+//
+// The deck is a patch of the land strip's own terrain: five level-8 tiles (~9.4 km each) of the noise
+// lattice, drawn flat on top of the slab by the same quadtree and shader (the DECK define), at 0.15 of
+// the height and flattening to deck level over the outer 1.5 km. deckH() is the JS twin, for landing and walking.
+const GSV_NAME = 'GSV Quietly Confident';
+const S8 = TILE0 / 256;
+const DECK_K0 = 4524, DECK_KU = 128;   // source patch on the centreline, picked for ridges, rivers and lakes
+const DECK_L = 5 * S8, DECK_W = S8, DECK_SCALE = 0.15;
+const GSV_L = DECK_L + 400, GSV_W = DECK_W + 400, GSV_T = 2000, GSV_A = 0;
+const gsvPos = ringPoint(GSV_A, 0, 15000 + GSV_T / 2, new THREE.Vector3());
+const gsvQ = levelQ(GSV_A, new THREE.Quaternion());
+const GSV_E = new THREE.Vector3(-Math.sin(GSV_A / R), 0, Math.cos(GSV_A / R));    // east, along the deck
+const GSV_N = new THREE.Vector3(0, 1, 0);                                          // north, across it
+const GSV_UP = new THREE.Vector3(-Math.cos(GSV_A / R), 0, -Math.sin(GSV_A / R));  // toward the axis
+const gsv = new THREE.Group();
+gsv.quaternion.copy(gsvQ);
+scene.add(gsv);
+let gsvOn = false;  // starts off; X turns it on
+
+// Deck coordinates: x east along the deck, y north across it, h above the deck surface; (0, 0) is its centre.
+const deckPoint = (x, y, h, out) => out.copy(gsvPos).addScaledVector(GSV_E, x).addScaledVector(GSV_N, y).addScaledVector(GSV_UP, GSV_T / 2 + h);
+const deckFall = (x, y) => smoothstep(Math.min(DECK_L / 2 - Math.abs(x), DECK_W / 2 - Math.abs(y)), 0, 1500);
+const deckH = (x, y) => DECK_SCALE * deckFall(x, y) * heightAt(DECK_K0 * S8 + DECK_L / 2 + x, -HW + DECK_KU * S8 + DECK_W / 2 + y);
+const dl = new THREE.Vector3();
+function deckLocal(p) {  // ring-frame point -> deck coordinates, and whether it's over the deck (or inside the slab)
+  dl.copy(p).sub(gsvPos);
+  const x = dl.dot(GSV_E), y = dl.dot(GSV_N), h = dl.dot(GSV_UP) - GSV_T / 2;
+  return { x, y, h, on: gsvOn && Math.abs(x) < DECK_L / 2 && Math.abs(y) < DECK_W / 2 && h > -GSV_T };
+}
+
+const DECK_MAX = 2048;
+const deckTiles = new THREE.InstancedBufferGeometry();
+deckTiles.setAttribute('position', tileGeo.attributes.position);
+deckTiles.setIndex(tileGeo.index);
+const deckIdx = new THREE.InstancedBufferAttribute(new Uint32Array(DECK_MAX * 3), 3).setUsage(THREE.DynamicDrawUsage);
+const deckCenter = new THREE.InstancedBufferAttribute(new Float32Array(DECK_MAX * 4), 4).setUsage(THREE.DynamicDrawUsage);
+deckTiles.setAttribute('aIdx', deckIdx);
+deckTiles.setAttribute('aCenter', deckCenter);
+const deckMat = new THREE.MeshStandardMaterial({ roughness: 0.9, side: THREE.DoubleSide, flatShading: true });
+deckMat.defines = { DECK: '' };
+deckMat.onBeforeCompile = patchTiles;
+const deckMesh = new THREE.Mesh(deckTiles, deckMat);
+deckMesh.frustumCulled = false;
+scene.add(deckMesh);
+gsv.visible = deckMesh.visible = gsvOn;
+let deckCount = 0, camDeck = null;
+
+// Same rule as visit(): split while the camera is closer than lodDetail × the tile size.
+function visitDeck(ka, ku, level) {
+  const size = TILE0 / 2 ** level, k = 2 ** (level - 8);
+  const x0 = (ka - DECK_K0 * k) * size - DECK_L / 2, y0 = (ku - DECK_KU * k) * size - DECK_W / 2;
+  deckPoint(x0 + size / 2, y0 + size / 2, 0, sphere.center).sub(camPos);
+  sphere.radius = 0.75 * size + 1000;
+  if (!frustum.intersectsSphere(sphere)) return;
+  const c = camDeck, dist = Math.hypot(c.x - clamp(c.x, x0, x0 + size), c.y - clamp(c.y, y0, y0 + size), c.h - clamp(c.h, 0, 1000));
+  if (level < MAX_LEVEL && dist < size * lodDetail) {
+    visitDeck(2 * ka, 2 * ku, level + 1);
+    visitDeck(2 * ka + 1, 2 * ku, level + 1);
+    visitDeck(2 * ka, 2 * ku + 1, level + 1);
+    visitDeck(2 * ka + 1, 2 * ku + 1, level + 1);
+  } else if (deckCount < DECK_MAX) {
+    deckIdx.array.set([ka, ku, level], deckCount * 3);
+    deckCenter.array.set([sphere.center.x, sphere.center.y, sphere.center.z, GSV_A / R], deckCount * 4);
+    deckCount++;
+  }
+}
+
+function toggleGsv() {
+  if (gsvOn && mode === 'walk' && player.deck) toShip();
+  gsvOn = !gsvOn;
+  gsv.visible = deckMesh.visible = gsvOn;
+  updateHud();
+}
+{
+  // Textures tile every `metres`, since extruded side and cap UVs are in metres.
+  const canvasTex = (size, metres, draw) => {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d'), size);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1 / metres, 1 / metres);
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return t;
+  };
+  let seed = 7;
+  const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+  // Side walls: 512 px = 400 m, 16 decks of 32 windows. The glow map lights a random share of each deck.
+  const sideMap = canvasTex(512, 400, (g, n) => {
+    g.fillStyle = '#c3c8d0'; g.fillRect(0, 0, n, n);
+    for (let r = 0; r < 16; r++) {
+      g.fillStyle = '#9aa1ab'; g.fillRect(0, r * 32 + 30, n, 2);
+      g.fillStyle = '#2b3442';
+      for (let c = 0; c < 32; c++) g.fillRect(c * 16 + 4, r * 32 + 12, 8, 6);
+    }
+  });
+  const sideGlow = canvasTex(512, 400, (g, n) => {
+    g.fillStyle = '#000'; g.fillRect(0, 0, n, n);
+    for (let r = 0; r < 16; r++) {
+      const busy = rnd() * 0.8;
+      for (let c = 0; c < 32; c++) if (rnd() < busy) {
+        g.fillStyle = rnd() < 0.8 ? '#ffd08a' : '#bfe4ff';
+        g.fillRect(c * 16 + 4, r * 32 + 12, 8, 6);
+      }
+    }
+  });
+  const capMap = canvasTex(256, 1000, (g, n) => {
+    g.fillStyle = '#b4bac3'; g.fillRect(0, 0, n, n);
+    g.strokeStyle = '#8f96a0'; g.lineWidth = 2;
+    for (let i = 0; i < 4; i++) { g.strokeRect(i * 64, 0, 64, n); g.strokeRect(0, i * 64, n, 64); }
+  });
+
+  // Hull: a rounded rectangle (x across, y along) extruded by its thickness, with the landing bays as
+  // holes. The holes run the full height; a lit ceiling closes each one 400 m up, and the deck covers the top.
+  const shape = new THREE.Shape(), x = GSV_W / 2, y = GSV_L / 2, r = 200;
+  shape.moveTo(-x + r, -y); shape.lineTo(x - r, -y); shape.quadraticCurveTo(x, -y, x, -y + r);
+  shape.lineTo(x, y - r); shape.quadraticCurveTo(x, y, x - r, y);
+  shape.lineTo(-x + r, y); shape.quadraticCurveTo(-x, y, -x, y - r);
+  shape.lineTo(-x, -y + r); shape.quadraticCurveTo(-x, -y, -x + r, -y);
+  const BAY_W = 1000, BAY_L = 2000, bays = [];
+  for (const bx of [-2500, 2500]) for (const by of [-15000, 0, 15000]) bays.push([bx, by]);
+  for (const [bx, by] of bays) {
+    const h = new THREE.Path();
+    h.moveTo(bx - BAY_W / 2, by - BAY_L / 2); h.lineTo(bx + BAY_W / 2, by - BAY_L / 2);
+    h.lineTo(bx + BAY_W / 2, by + BAY_L / 2); h.lineTo(bx - BAY_W / 2, by + BAY_L / 2); h.closePath();
+    shape.holes.push(h);
+  }
+  const hullGeo = new THREE.ExtrudeGeometry(shape, { depth: GSV_T, bevelEnabled: false, curveSegments: 6 });
+  // shape y -> -z, extrusion -> +y. The top sits 2 m under the deck's flat rim so the two don't z-fight.
+  hullGeo.rotateX(-Math.PI / 2).translate(0, -GSV_T / 2 - 2, 0);
+  // withDay dims emissive light at night, which would switch the windows off; this keeps them lit.
+  const sideMat = new THREE.MeshStandardMaterial({ map: sideMap, emissiveMap: sideGlow, emissive: 0xffffff, metalness: 0.3, roughness: 0.6 });
+  sideMat.onBeforeCompile = s => { patchDay(s, 'local'); s.fragmentShader = s.fragmentShader.replace('totalEmissiveRadiance *= vDay;', ''); };
+  const capMat = withDay(new THREE.MeshStandardMaterial({ map: capMap, metalness: 0.3, roughness: 0.6 }), 'local');
+  gsv.add(new THREE.Mesh(hullGeo, [capMat, sideMat]));  // extrude groups: 0 caps, 1 side walls
+
+  const ceilGeo = new THREE.PlaneGeometry(BAY_W, BAY_L).rotateX(Math.PI / 2);  // faces down
+  const ceilMat = new THREE.MeshBasicMaterial({ color: 0xffe2b0 });
+  for (const [bx, by] of bays) {
+    const m = new THREE.Mesh(ceilGeo, ceilMat);
+    m.position.set(bx, -GSV_T / 2 + 400, -by);
+    gsv.add(m);
+  }
+
+  // Docking bays: ten down each long side, a dark mouth inside a glowing frame.
+  const frameGeo = new THREE.PlaneGeometry(1300, 500), mouthGeo = new THREE.PlaneGeometry(1200, 400);
+  const frameMat = new THREE.MeshBasicMaterial({ color: 0x8fd0ff }), mouthMat = new THREE.MeshBasicMaterial({ color: 0x07090d });
+  for (const side of [-1, 1]) for (let i = 0; i < 10; i++) {
+    for (const [geo, mat, off] of [[frameGeo, frameMat, 3], [mouthGeo, mouthMat, 6]]) {
+      const m = new THREE.Mesh(geo, mat);
+      m.rotation.y = side * Math.PI / 2;
+      m.position.set(side * (GSV_W / 2 + off), 0, lerp(-20000, 20000, i / 9));
+      gsv.add(m);
+    }
+  }
+}
+
+// Name and distance tags over other players and the GSV. rel is the position relative to the camera.
+const fmtDist = d => d < 1e4 ? `${d.toFixed(0)} m` : `${(d / 1000).toFixed(0)} km`;
+const labelV = new THREE.Vector3();
+function placeLabel(el, rel, text) {
+  labelV.copy(rel).project(camera);
+  const show = labelV.z < 1 && Math.abs(labelV.x) < 1 && Math.abs(labelV.y) < 1;
+  el.style.display = show ? '' : 'none';
+  if (show) {
+    el.textContent = `◆ ${text} · ${fmtDist(rel.length())}`;
+    el.style.transform = `translate(${(labelV.x + 1) / 2 * innerWidth}px, ${(1 - labelV.y) / 2 * innerHeight}px) translate(-50%, -150%)`;
+  }
+}
+const gsvLabel = document.createElement('div');
+gsvLabel.className = 'peer';
+document.body.append(gsvLabel);
+// Runs after updateTiles(), which sets the frustum.
+function updateGsv() {
+  deckCount = 0;
+  if (gsvOn) {
+    gsv.position.copy(gsvPos).sub(camPos);
+    placeLabel(gsvLabel, gsv.position, GSV_NAME);
+    camDeck = deckLocal(camPos);
+    for (let i = 0; i < 5; i++) visitDeck(DECK_K0 + i, DECK_KU, 8);
+  } else gsvLabel.style.display = 'none';
+  deckTiles.instanceCount = deckCount;
+  deckIdx.needsUpdate = deckCenter.needsUpdate = true;
+}
+
+function goToGsv() {
+  // 15 km off the west end, 1 km above the deck, facing east along it, stopped.
+  shipQ.copy(gsvQ);
+  shipPos.set(0, GSV_T / 2 + 1000, GSV_L / 2 + 15000).applyQuaternion(gsvQ).add(gsvPos);
+  camQ.copy(shipQ);
+  shipSpeed = 0;
+  mode = 'ship';
+  updateHud();
+}
+
+function spawn() {
+  // In the ship, 300 m over the land strip, 60 km west of the GSV and facing it.
+  const a = wrapA(GSV_A - GSV_L / 2 - 60000);
+  ringPoint(a, 0, Math.max(heightAt(a, 0), 0) + 300, shipPos);
+  levelQ(a, shipQ);
+  camQ.copy(shipQ);
+  shipSpeed = 100;
+  mode = 'ship';
+  updateHud();
+}
+
+function toWalk() {
+  // Drop straight down below the ship, onto the GSV deck if it's over it; the ship stays parked.
+  // On the deck, player.a and player.u are deck x and y instead of ring coordinates.
+  mode = 'walk';
+  const dk = deckLocal(shipPos);
+  player.deck = dk.on;
+  if (dk.on) {
+    player.a = clamp(dk.x, -DECK_L / 2 + 10, DECK_L / 2 - 10);
+    player.u = clamp(dk.y, -DECK_W / 2 + 10, DECK_W / 2 - 10);
+  } else {
+    player.a = wrapA(Math.atan2(shipPos.z, shipPos.x) * R);
+    player.u = clamp(shipPos.y, -HW + 10, HW - 10);
+  }
+  Object.assign(player, { pitch: 0, z: 0, vz: 0 });
+  updateHud();
+}
+
+function toShip() {
+  // Bring the ship to the walker, 20 m up, facing the way they were looking.
+  mode = 'ship';
+  if (player.deck) deckPoint(player.a, player.u, deckH(player.a, player.u) + 20, shipPos);
+  else ringPoint(player.a, player.u, Math.max(heightAt(player.a, player.u), 0) + 20, shipPos);
+  levelQ(player.deck ? GSV_A : player.a, shipQ).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw));
+  camQ.copy(shipQ);
+  shipSpeed = 50;
+  updateHud();
+}
+
+function overview() {
+  mode = 'ship';
+  shipPos.set(0, 0.9 * R, 2.2 * R);
+  shipQ.setFromRotationMatrix(new THREE.Matrix4().lookAt(shipPos, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)));
+  camQ.copy(shipQ);
+  shipSpeed = 0;
+  updateHud();
+}
+
+const east = new THREE.Vector3(), up = new THREE.Vector3(), fwd = new THREE.Vector3(), fwdP = new THREE.Vector3(),
+      upP = new THREE.Vector3(), right = new THREE.Vector3(), basis = new THREE.Matrix4(), dq = new THREE.Quaternion();
+const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
+
+function updateShip(dt) {
+  if (keys.has('KeyW')) shipSpeed = Math.min(Math.max(shipSpeed, 5) * Math.exp(1.5 * dt), SHIP_MAX);
+  if (keys.has('KeyS')) shipSpeed = shipSpeed < 1 ? 0 : shipSpeed * Math.exp(-2.5 * dt);
+
+  // A/D roll. Without roll input, the wings drift back to level with the local floor.
+  const roll = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0);
+  if (roll) shipQ.multiply(dq.setFromAxisAngle(Z, roll * 1.5 * dt));
+  else {
+    const r = Math.hypot(shipPos.x, shipPos.z);
+    up.set(-shipPos.x / r, 0, -shipPos.z / r);
+    right.copy(X).applyQuaternion(shipQ);
+    shipQ.multiply(dq.setFromAxisAngle(Z, -right.dot(up) * 1.5 * dt));
+  }
+  shipQ.normalize();
+
+  fwd.set(0, 0, -1).applyQuaternion(shipQ);
+  shipPos.addScaledVector(fwd, shipSpeed * dt);
+
+  // Keep above the ground or water while over the floor.
+  const r = Math.hypot(shipPos.x, shipPos.z);
+  if (r < R + 1000 && Math.abs(shipPos.y) < HW) {
+    const a = wrapA(Math.atan2(shipPos.z, shipPos.x) * R);
+    const minR = R - Math.max(heightAt(a, shipPos.y), 0) - CLEARANCE;
+    if (r > minR) { shipPos.x *= minR / r; shipPos.z *= minR / r; }
+  }
+  // And above the GSV deck.
+  const dk = deckLocal(shipPos);
+  if (dk.on) {
+    const g = deckH(dk.x, dk.y) + CLEARANCE;
+    if (dk.h < g) shipPos.addScaledVector(GSV_UP, g - dk.h);
+  }
+
+  // Chase camera: lags the ship's turns a little, then sits behind and above it.
+  camQ.slerp(shipQ, 1 - Math.exp(-6 * dt));
+  camPos.copy(CHASE).applyQuaternion(camQ).add(shipPos);
+  camera.quaternion.copy(camQ);
+}
+
+function updateWalk(dt) {
+  const f = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+  const s = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+  const cy = Math.cos(player.yaw), sy = Math.sin(player.yaw);
+  // In (east = +a, north = +u): forward is (cy, sy), right is (sy, -cy).
+  const stepA = (f * cy + s * sy) * walkSpeed * dt, stepU = (f * sy - s * cy) * walkSpeed * dt;
+  if (player.deck) {  // held 10 m inside the deck's edge
+    player.a = clamp(player.a + stepA, -DECK_L / 2 + 10, DECK_L / 2 - 10);
+    player.u = clamp(player.u + stepU, -DECK_W / 2 + 10, DECK_W / 2 - 10);
+  } else {
+    player.a = wrapA(player.a + stepA);
+    player.u = clamp(player.u + stepU, -HW + 10, HW - 10);
+  }
+
+  // Jump launch speed equals walk speed, so scrolling up gives bigger leaps.
+  if (keys.has('Space') && player.z === 0) player.vz = walkSpeed;
+  player.vz -= GRAVITY * dt;
+  player.z = Math.max(0, player.z + player.vz * dt);
+  if (player.z === 0) player.vz = Math.max(0, player.vz);
+
+  if (player.deck) {
+    deckPoint(player.a, player.u, deckH(player.a, player.u) + EYE + player.z, camPos);
+  } else {
+    const ground = Math.max(heightAt(player.a, player.u), 0); // walk on the water surface
+    ringPoint(player.a, player.u, ground + EYE + player.z, camPos);
+  }
+  const th = player.deck ? GSV_A / R : player.a / R;
+
+  up.set(-Math.cos(th), 0, -Math.sin(th));
+  east.set(-Math.sin(th), 0, Math.cos(th));
+  fwd.copy(east).multiplyScalar(cy);
+  fwd.y = sy;
+  const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
+  fwdP.copy(fwd).multiplyScalar(cp).addScaledVector(up, sp);
+  upP.copy(up).multiplyScalar(cp).addScaledVector(fwd, -sp);
+  right.crossVectors(fwdP, upP);
+  basis.makeBasis(right, upP, fwdP.negate());
+  camera.quaternion.setFromRotationMatrix(basis);
+}
+
+renderer.domElement.addEventListener('click', () => { renderer.domElement.requestPointerLock(); startAudio(); });
+addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  if (mode === 'walk') {
+    player.yaw -= e.movementX * 0.002;
+    player.pitch = clamp(player.pitch - e.movementY * 0.002, -1.5, 1.5);
+  } else {
+    // Mouse turns the ship about its own axes: right/left is yaw, up/down is pitch.
+    shipQ.multiply(dq.setFromAxisAngle(up.set(0, 1, 0), -e.movementX * 0.002));
+    shipQ.multiply(dq.setFromAxisAngle(X, -e.movementY * 0.002));
+  }
+});
+addEventListener('keydown', e => {
+  keys.add(e.code);
+  if (e.code === 'KeyV') mode === 'walk' ? toShip() : toWalk();
+  if (e.code === 'KeyO') overview();
+  if (e.code === 'KeyH') spawn();
+  if (e.code === 'KeyJ' && peers.size) goTo(peers.values().next().value);
+  if (e.code === 'KeyG' && gsvOn) goToGsv();
+  if (e.code === 'KeyX') toggleGsv();
+  if (e.code === 'KeyM') { muted = !muted; updateHud(); }
+  if (e.code === 'KeyP') { spinning = !spinning; updateHud(); }
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('wheel', e => {
+  const k = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+  if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, 1e5); updateHud(); }
+  else shipSpeed = clamp(Math.max(shipSpeed, 4) * k, 0, SHIP_MAX);
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const hud = document.getElementById('hud');
+const fmtSpeed = v => { const mph = v * 2.23694; return `${mph < 100 ? mph.toFixed(1) : Math.round(mph).toLocaleString()} mph`; };
+function updateHud() {
+  const top = mode === 'walk'
+    ? `<b>WALK</b> &nbsp; <b>Click</b> look (Esc releases) &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump (scales with speed)<br>` +
+      `<b>Scroll</b> speed (${fmtSpeed(walkSpeed)}) &nbsp; `
+    : `<b>SHIP</b> &nbsp; <b>Click</b> steer with mouse (Esc releases) &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll<br>` +
+      `<b>Scroll</b> throttle &nbsp; `;
+  hud.innerHTML = top + `<b>V</b> walk/ship &nbsp; <b>O</b> overview &nbsp; <b>H</b> respawn &nbsp; <b>J</b> join other player &nbsp; <b>G</b> go to GSV &nbsp; <b>X</b> GSV ${gsvOn ? 'on' : 'off'} &nbsp; <b>P</b> day cycle ${spinning ? 'on' : 'off'} &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
+}
+spawn();
+
+// --- Contrails ---
+// A line from each wingtip. Points are kept in ring-frame doubles and rewritten relative to the camera
+// every frame. A new point is laid every 50 ms and the newest one follows the wingtip; older points fade.
+const TRAIL_N = 60, TIPS = [new THREE.Vector3(-5, 0, 2.5), new THREE.Vector3(5, 0, 2.5)];
+const trailMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+const tipV = new THREE.Vector3();
+function makeTrail() {
+  const lines = TIPS.map(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_N * 3), 3));
+    const c = new Float32Array(TRAIL_N * 4);
+    for (let i = 0; i < TRAIL_N; i++) c.set([1, 1, 1, 0.6 * i / (TRAIL_N - 1)], i * 4);  // newest is last
+    g.setAttribute('color', new THREE.BufferAttribute(c, 4));
+    const line = new THREE.Line(g, trailMat);
+    line.frustumCulled = false;
+    scene.add(line);
+    return line;
+  });
+  return { lines, pts: TIPS.map(() => []), t: 0 };
+}
+function updateTrail(tr, pos, q) {
+  const now = performance.now(), lay = now - tr.t > 50;
+  if (lay) tr.t = now;
+  tr.lines.forEach((line, k) => {
+    const pts = tr.pts[k];
+    tipV.copy(TIPS[k]).applyQuaternion(q).add(pos);
+    if (lay || !pts.length) { pts.push(tipV.clone()); if (pts.length > TRAIL_N) pts.shift(); }
+    else pts[pts.length - 1].copy(tipV);
+    // Fill the end of the buffer, so the fade always ends at the newest point.
+    const arr = line.geometry.attributes.position.array, s = TRAIL_N - pts.length;
+    pts.forEach((p, i) => arr.set([p.x - camPos.x, p.y - camPos.y, p.z - camPos.z], (s + i) * 3));
+    line.geometry.attributes.position.needsUpdate = true;
+    line.geometry.setDrawRange(s, pts.length);
+  });
+}
+const myTrail = makeTrail();
+
+// --- Speed feel ---
+// Felt speed f runs 0..1 on a log scale from 50 m/s to SHIP_MAX. It widens the field of view,
+// stretches the engine glow, and fades in streaks of dust that stream past the ship.
+// Dust lives in ship-local coordinates (forward is -Z) and drifts backward at the ship's speed,
+// capped so the streaks stay readable; each streak is a line from bright head to clear tail.
+const DUST_N = 400, DUST_NEAR = 50, DUST_FAR = 300;
+const dust = new Float32Array(DUST_N * 3);
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DUST_N * 6), 3));
+{
+  const c = new Float32Array(DUST_N * 8);
+  for (let i = 0; i < DUST_N; i++) c.set([0.85, 0.92, 1, 1, 0.85, 0.92, 1, 0], i * 8);
+  dustGeo.setAttribute('color', new THREE.BufferAttribute(c, 4));
+}
+const dustMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, opacity: 0 });
+const dustLines = new THREE.LineSegments(dustGeo, dustMat);
+dustLines.frustumCulled = false;
+scene.add(dustLines);
+// Place a mote off the flight line (15-150 m out), so none passes through the ship.
+const seedDust = (i, z) => {
+  const ang = Math.random() * Math.PI * 2, rad = 15 + 135 * Math.sqrt(Math.random());
+  dust.set([rad * Math.cos(ang), rad * Math.sin(ang), z], i * 3);
+};
+for (let i = 0; i < DUST_N; i++) seedDust(i, DUST_NEAR - Math.random() * (DUST_NEAR + DUST_FAR));
+
+const shipGlow = ship.getObjectByName('glow'), dv = new THREE.Vector3();
+let felt = 0;
+function updateSpeedFx(dt) {
+  const target = mode === 'ship' ? clamp(Math.log(shipSpeed / 50) / Math.log(SHIP_MAX / 50), 0, 1) : 0;
+  felt += (target - felt) * (1 - Math.exp(-4 * dt));
+
+  camera.fov = 60 + 25 * felt;
+  camera.updateProjectionMatrix();
+  shipGlow.scale.set(1 + 0.4 * felt, 1 + 0.4 * felt, 1 + 5 * felt);
+  shipGlow.position.z = 6.1 + 2 * felt;
+
+  dustMat.opacity = 0.7 * felt;
+  dustLines.visible = felt > 0.01;
+  if (!dustLines.visible) return;
+  const flow = Math.min(shipSpeed, 2000), len = 1 + 60 * felt;
+  const arr = dustGeo.attributes.position.array, base = dv.copy(shipPos).sub(camPos);
+  for (let i = 0; i < DUST_N; i++) {
+    let z = dust[i * 3 + 2] + flow * dt;
+    if (z > DUST_NEAR) { seedDust(i, z - DUST_NEAR - DUST_FAR); z = dust[i * 3 + 2]; }
+    dust[i * 3 + 2] = z;
+    const x = dust[i * 3], y = dust[i * 3 + 1];
+    tipV.set(x, y, z).applyQuaternion(shipQ).add(base);
+    arr.set([tipV.x, tipV.y, tipV.z], i * 6);
+    tipV.set(x, y, z - len).applyQuaternion(shipQ).add(base);
+    arr.set([tipV.x, tipV.y, tipV.z], i * 6 + 3);
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+}
+
+// --- Sound ---
+// Starts on the first click (browsers need a gesture). The engine is two detuned saws through a
+// low-pass, pitched and opened up by felt speed. Wind is looped noise through a band-pass, loud only
+// in thick air at speed: air density uses the same 8 km scale height as the atmosphere shader.
+// M mutes.
+let audio = null;
+function startAudio() {
+  if (audio) return;
+  const ctx = new AudioContext(), out = ctx.createGain();
+  out.connect(ctx.destination);
+  const engine = ctx.createGain(), lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.connect(engine).connect(out);
+  const oscs = [0, 7].map(cents => {
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth'; o.detune.value = cents; o.connect(lp); o.start();
+    return o;
+  });
+  const noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = noise.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), wind = ctx.createGain();
+  src.buffer = noise; src.loop = true;
+  bp.type = 'bandpass'; bp.Q.value = 0.7;
+  src.connect(bp).connect(wind).connect(out);
+  src.start();
+  audio = { ctx, out, engine, lp, oscs, bp, wind };
+}
+function updateAudio() {
+  if (!audio) return;
+  const t = audio.ctx.currentTime, k = 0.1;  // smoothing time constant, s
+  const p = mode === 'walk' ? camPos : shipPos;
+  const alt = R - Math.hypot(p.x, p.z), dens = Math.abs(p.y) < HW && alt > -4000 ? Math.exp(-Math.max(alt, 0) / 8000) : 0;
+  const air = mode === 'ship' ? dens * Math.min(shipSpeed / 300, 1) : 0;
+  audio.out.gain.setTargetAtTime(muted ? 0 : 1, t, k);
+  audio.engine.gain.setTargetAtTime(mode === 'ship' ? 0.03 + 0.05 * felt : 0, t, k);
+  audio.oscs.forEach(o => o.frequency.setTargetAtTime(45 + 110 * felt, t, k));
+  audio.lp.frequency.setTargetAtTime(200 + 1800 * felt, t, k);
+  audio.wind.gain.setTargetAtTime(0.25 * air, t, k);
+  audio.bp.frequency.setTargetAtTime(300 + 1700 * felt, t, k);
+}
+
+// --- Multiplayer ---
+// server.js relays poses between clients. Terrain is deterministic, so each client sends only its ship
+// pose, plus its eye position while walking, 15 times a second. Remote players are drawn 100 ms in the
+// past, between the two snapshots around that time. The day angle comes from the server's start time.
+// Without server.js (e.g. python http.server) the socket just fails and the page runs single-player.
+// Opened as a file there is no host to connect to, so a stand-in that never opens takes the socket's place.
+const peers = new Map();  // id -> { name, snaps: [{ t, s, w }], ship, body, label }
+const walkerGeo = new THREE.CapsuleGeometry(0.3, 1.2, 4, 8);
+const walkerMat = withDay(new THREE.MeshStandardMaterial({ color: 0xff9f43, roughness: 0.6 }), 'local');
+const myName = new URLSearchParams(location.search).get('name') || 'pilot';
+const Y = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), pUp = new THREE.Vector3();
+let epoch = null, seekPeer = false;
+
+const ws = location.host ? new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`) : { readyState: WebSocket.CLOSED };
+ws.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type === 'hello') {
+    epoch = m.epoch;
+    dayUniforms.uDayAngle.value = DAY_RATE * (Date.now() - epoch) / 1000;
+    seekPeer = m.others > 0;  // someone is already here: spawn next to them once their pose arrives
+    if (!seekPeer) spawn();
+  } else if (m.type === 'leave') {
+    const p = peers.get(m.id);
+    if (p) { scene.remove(p.ship, p.body, ...p.trail.lines); p.label.remove(); peers.delete(m.id); }
+  } else if (m.type === 'pose') {
+    let p = peers.get(m.id);
+    if (!p) {
+      p = { snaps: [], ship: ship.clone(), body: new THREE.Mesh(walkerGeo, walkerMat), label: document.createElement('div'), trail: makeTrail() };
+      p.ship.getObjectByName('glow').scale.set(1, 1, 1);  // clone copies our current glow stretch
+      p.ship.getObjectByName('glow').position.z = 6.1;
+      p.label.className = 'peer';
+      document.body.append(p.label);
+      scene.add(p.ship, p.body);
+      peers.set(m.id, p);
+    }
+    p.name = m.name;
+    p.snaps.push({ t: performance.now(), s: m.s, w: m.w });
+    if (p.snaps.length > 10) p.snaps.shift();
+    if (seekPeer) { seekPeer = false; goTo(p); }
+  }
+};
+setInterval(() => {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'pose', name: myName, s: [...shipPos.toArray(), ...shipQ.toArray()], w: mode === 'walk' ? camPos.toArray() : null }));
+}, 66);
+
+function goTo(p) {
+  const { s, w } = p.snaps[p.snaps.length - 1];
+  if (w) {  // on foot: bring the ship down beside them, on the ring or the GSV deck
+    const dk = deckLocal(pv.fromArray(w));
+    player.deck = dk.on;
+    player.a = dk.on ? dk.x : wrapA(Math.atan2(w[2], w[0]) * R);
+    player.u = dk.on ? dk.y : clamp(w[1], -HW + 10, HW - 10);
+    player.yaw = 0;
+    toShip();
+  } else {  // flying: sit 60 m behind their ship, stopped
+    shipQ.set(s[3], s[4], s[5], s[6]);
+    shipPos.set(0, 10, 60).applyQuaternion(shipQ).add(pv.set(s[0], s[1], s[2]));
+    camQ.copy(shipQ);
+    shipSpeed = 0;
+    mode = 'ship';
+    updateHud();
+  }
+}
+
+const lerp3 = (a, b, k, out) => out.set(lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k));
+const qa = new THREE.Quaternion(), qb = new THREE.Quaternion();
+function updatePeers() {
+  const t = performance.now() - 100;
+  for (const p of peers.values()) {
+    const sn = p.snaps;
+    let b = sn.findIndex(x => x.t > t);
+    if (b === -1) b = sn.length - 1;  // nothing newer yet: hold the newest
+    const A = sn[Math.max(b - 1, 0)], B = sn[b];
+    const k = B.t > A.t ? clamp((t - A.t) / (B.t - A.t), 0, 1) : 1;
+
+    p.ship.position.copy(lerp3(A.s, B.s, k, pv)).sub(camPos);
+    p.ship.quaternion.slerpQuaternions(qa.fromArray(A.s, 3), qb.fromArray(B.s, 3), k);
+    updateTrail(p.trail, lerp3(A.s, B.s, k, pv), p.ship.quaternion);
+
+    p.body.visible = !!B.w;
+    if (B.w) {
+      lerp3(A.w || B.w, B.w, k, pv);  // eye position; the capsule's centre sits 0.8 m below it
+      const r = Math.hypot(pv.x, pv.z);
+      pUp.set(-pv.x / r, 0, -pv.z / r);
+      p.body.position.copy(pv).addScaledVector(pUp, -0.8).sub(camPos);
+      p.body.quaternion.setFromUnitVectors(Y, pUp);
+    }
+
+    placeLabel(p.label, (B.w ? p.body : p.ship).position, p.name);
+  }
+}
+
+const clock = new THREE.Clock();
+const fpsEl = document.getElementById('fps'), statsEl = document.getElementById('stats');
+let frames = 0, fpsT = performance.now();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (spinning) dayUniforms.uDayAngle.value = epoch === null
+    ? dayUniforms.uDayAngle.value + DAY_RATE * dt
+    : DAY_RATE * (Date.now() - epoch) / 1000;  // shared clock, so everyone sees the same day
+  const dayAngle = dayUniforms.uDayAngle.value;
+  shade.rotation.y = -dayAngle - Math.PI / 2;   // covers azimuths dayAngle + 90°..270°, the night side
+  stars.rotation.y = -dayAngle;
+
+  if (mode === 'walk') updateWalk(dt);
+  else updateShip(dt);
+  dayUniforms.uLocalDay.value = dayFactor(Math.atan2(camPos.z, camPos.x));
+  dayUniforms.uCamPos.value.copy(camPos);
+  ship.position.copy(shipPos).sub(camPos);
+  ship.quaternion.copy(shipQ);
+  updateTrail(myTrail, shipPos, shipQ);
+  updateSpeedFx(dt);
+  updateAudio();
+  camera.updateMatrixWorld();
+  updatePeers();
+  farGroup.position.copy(camPos).negate();
+  camera.updateMatrixWorld();
+  updateTiles();
+  updateGsv();
+  updateTowns();
+  updateShrubs();
+  updateBuildings();
+  renderer.render(scene, camera);
+
+  frames++;
+  const now = performance.now();
+  if (now - fpsT >= 500) {
+    fpsEl.textContent = `${Math.round(frames * 1000 / (now - fpsT))} fps · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris drawn`;
+    const p = mode === 'walk' ? camPos : shipPos, alt = R - Math.hypot(p.x, p.z);
+    statsEl.innerHTML = `${tileCount} tiles${deckCount ? ` + ${deckCount} deck` : ''}, deepest level ${deepest}<br>` +
+      `finest spacing ${(TILE0 / 2 ** deepest / GRID).toFixed(3)} m<br>` +
+      `altitude ${alt < 1e4 ? alt.toFixed(1) + ' m' : (alt / 1000).toFixed(0) + ' km'}` +
+      (mode === 'ship' ? `<br>speed ${fmtSpeed(shipSpeed)}` : '') + `<br>${shrubMesh.count} shrubs, ${buildingMesh.count} buildings, ${nearTowns.length} settlements near`;
+    frames = 0; fpsT = now;
+  }
+});
+</script>
+</body>
+</html>
