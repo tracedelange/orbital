@@ -1,7 +1,16 @@
 {
   "name": "culture-orbital",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node server.js" },
-  "dependencies": { "ws": "^8.18.0" }
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "obscenity": "^0.4.6"
+  },
+  "devDependencies": {
+    "wrangler": "^4.157.0"
+  }
 }
