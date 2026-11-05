@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/tracedelange/orbital/compare/v1.1.1...v1.1.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* Esc during landing left no menu and no mouse; cap walk speed ([7c172e4](https://github.com/tracedelange/orbital/commit/7c172e4b0d133d10d93c3ffb4a3c540ecd8c7f4f))
+
 ## [1.1.1](https://github.com/tracedelange/orbital/compare/v1.1.0...v1.1.1) (2026-11-05)
 
 
