@@ -294,6 +294,7 @@ varying float vSkirt;    // 0 on the surface, above 0 on a skirt face
 varying float vFarm;     // farm-region noise
 varying float vUrban;    // 1 inside a settlement, fading at its edge
 varying float vFarmNear; // 1 within a few radii of a settlement
+varying vec2 vMega;      // offset from the nearest super city's centre, in metres (x east, y across)
 flat varying uvec2 vFieldBase;  // field lattice: integer origin for this tile...
 varying vec2 vFieldLf;          // ...and position from it, in ~300 m field cells
 uniform vec4 uTowns[64];        // nearest settlements: centre minus camera (xyz), radius (w)
@@ -522,6 +523,8 @@ function patchTiles(shader) {
         near = max(near, 1.0 - smoothstep(r, 2.5 * r, d));
       }
       vUrban = urban; vFarmNear = near;
+      vMega = vec2(1e7);
+      ${MEGAS.map(c => `{ vec2 m = vec2(arcD(tTheta, ${(c.a / R).toFixed(6)}), tU - ${f1(c.u)}); if (dot(m, m) < dot(vMega, vMega)) vMega = m; }`).join('\n      ')}
     #endif
     atmosphere(transformed, 6, vAtmT, vAtmI);`);
   shader.fragmentShader = /* glsl */`
@@ -536,6 +539,7 @@ function patchTiles(shader) {
     varying float vFarm;
     varying float vUrban;
     varying float vFarmNear;
+    varying vec2 vMega;
     flat varying uvec2 vFieldBase;
     varying vec2 vFieldLf;
     uniform vec3 ${Object.keys(PALETTE).join(', ')};
@@ -585,6 +589,18 @@ function patchTiles(shader) {
       c = mix(c, vec3(0.13, 0.3, 0.09), urban * 0.6);   // mostly lawn and park
       // Night lights: streets and some blocks glow warm on the night side.
       cityGlow = vec3(1.0, 0.72, 0.38) * urban * (onLine * 0.9 + float((hc >> 12) & 3u) * 0.12) * 0.6;
+      // Super-city roads, the plan in megaPlan(): 8 avenues and 2 ring roads, 120 m wide, pale and lit at night.
+      float md = length(vMega), mr = ${f1(MEGAS[0].r)};   // every super city has the same radius
+      if (md < 1.6 * mr) {
+        float ang = atan(vMega.y, vMega.x), aw = 0.785398, sp = abs(mod(ang + aw / 2.0, aw) - aw / 2.0) * md, fw = max(fwidth(md), 1.0);
+        float pr = fract(mr * 0.1234) * 6.2832;   // townShape() in JS, for the edge distance e
+        float e = mr * (1.0 + 0.28 * sin(2.0 * ang + pr) + 0.22 * sin(3.0 * ang + 1.7 * pr) + 0.12 * sin(5.0 * ang + 2.9 * pr));
+        float road = max(step(0.12 * mr, md) * (1.0 - smoothstep(${MEGA_ROAD}.0 - fw, ${MEGA_ROAD}.0 + fw, sp)),
+          1.0 - smoothstep(${MEGA_ROAD}.0 - fw, ${MEGA_ROAD}.0 + fw, min(abs(md - 0.35 * e), abs(md - 0.7 * e))));
+        road *= smoothstep(0.2, 0.5, vUrban) * settle;
+        c = mix(c, vec3(0.6, 0.6, 0.58), road);
+        cityGlow += vec3(1.0, 0.8, 0.5) * road * 0.3;
+      }
       return mix(c, mix(uRiver, uIce, smoothstep(0.3, 0.55, cold)), wet);
     }\n` + shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
     #ifdef WATER
@@ -805,6 +821,20 @@ const townQ = (s, a, u) => { const da = arcDelta(a, s.a), du = u - s.u; return M
 
 // Super cities count as cities, with fixed spots and flattened ground (see MEGAS).
 for (const c of MEGAS) Object.assign(c, { h: heightAt(c.a, c.u), tier: 0 });
+// Super-city street plan, in the city's local metres (x east, y across): 8 radial avenues from 0.12 r outward
+// and ring roads at 0.35 and 0.7 of the way to the edge, all 120 m wide. Zones by q, the share of the way to the edge: 0 core
+// (< 0.15), 1 inner (< 0.35), 2 mid (< 0.7), 3 outer. About one district in four between the roads is a park.
+// The terrain shader paints the same roads (see vMega).
+const MEGA_ROAD = 60;   // half width
+function megaPlan(c, x, y) {
+  // The ring roads follow the city's wobbly outline (townShape), so the plan doesn't read as a target from above.
+  const d = Math.hypot(x, y), ang = Math.atan2(y, x), e = c.r * townShape(c.r, x, y), q = d / e, w = Math.PI / 4;
+  const spoke = Math.abs((((ang + w / 2) % w) + w) % w - w / 2) * d;   // distance to the nearest avenue
+  const road = (d > 0.12 * c.r && spoke < MEGA_ROAD) || Math.abs(d - 0.35 * e) < MEGA_ROAD || Math.abs(d - 0.7 * e) < MEGA_ROAD;
+  const ring = q < 0.35 ? 0 : q < 0.7 ? 1 : 2, sector = Math.floor((ang + Math.PI) / w);
+  const park = q > 0.15 && (tHash(ring, sector, 4100 + (c.a | 0)) & 7) < 2;
+  return { road, park, zone: q < 0.15 ? 0 : q < 0.35 ? 1 : q < 0.7 ? 2 : 3 };
+}
 // Settlements of every tier within each tier's range of (a, u), or within `range` if given.
 function settlementsNear(a, u, range) {
   const out = MEGAS.filter(c => Math.hypot(arcDelta(c.a, a), c.u - u) < (range ?? TIERS[0].range) + TOWN_REACH * c.r);
@@ -965,12 +995,17 @@ function makeBuildingChunk(ia, iu) {
   const a0 = ia * BCHUNK, u0 = iu * BCHUNK, list = [];
   const towns = settlementsNear(a0 + BCHUNK / 2, u0 + BCHUNK / 2, BCHUNK);
   for (const s of towns) {
-    const B = BUILD[s.tier], sp = B.spacing;
+    const B = BUILD[s.tier], sp = B.spacing, n0 = list.length;
     for (let a = Math.ceil(a0 / sp) * sp; a < a0 + BCHUNK; a += sp) for (let u = Math.ceil(u0 / sp) * sp; u < u0 + BCHUNK; u += sp) {
       const q = townQ(s, a, u);
       if (q > 1) continue;
       parkCell(list, a, u, q, s.tier, Math.round(a / sp), Math.round(u / sp), ringGround);
     }
+    // In a super city the skyline has the towers; the low-rise fabric keeps off its roads, and parks keep only trees.
+    if (MEGAS.includes(s)) list.push(...list.splice(n0).filter(b => {
+      const P = megaPlan(s, arcDelta(b.a, s.a), b.u - s.u);
+      return !P.road && b.kind !== 'tower' && (!P.park || b.kind === 'tree');
+    }));
   }
   return list;
 }
@@ -2059,25 +2094,35 @@ for (const P of PORTS) {
   P.label.className = 'peer';
   document.body.append(P.label);
 }
-// Super-city skylines: 120 towers of 300-1,500 m each, drawn out to 600 km (the chunked buildings only reach
-// a few km). Laid out once in the city's level frame (local -Z east, +Y up, X across), then moved with the camera.
-const MEGA_TOWERS = 120;
+// Super-city skylines on a 250 m lot grid, kept off roads and parks: supertalls of 600-1,500 m in the core,
+// 250-650 m towers in the inner ring and 120-300 m in the mid ring, as round towers or slabs set along the
+// ring roads, in three tints. Laid out once in the city's level frame (local -Z east, +Y up, X across) and
+// moved with the camera; drawn out to 600 km (the chunked buildings only reach a few km).
+const SLAB = paint(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), 0xffffff);
+const TOWER_TINTS = [new THREE.Color(0.9, 0.92, 0.95), new THREE.Color(0.68, 0.76, 0.86), new THREE.Color(0.93, 0.89, 0.82)];
 for (const c of MEGAS) {
-  const m = new THREE.InstancedMesh(FORMS.tower, buildingMat, MEGA_TOWERS), M = new THREE.Matrix4(), p = new THREE.Vector3(),
-        one = new THREE.Quaternion(), sc = new THREE.Vector3(), col = new THREE.Color(0.92, 0.94, 0.97);
-  for (let i = 0; i < MEGA_TOWERS; i++) {
-    const h = tHash(i, c.a | 0, 4000), h2 = tHash(i, c.a | 0, 4001);
-    const ang = (h & 1023) / 1024 * 2 * Math.PI, q = 0.85 * Math.sqrt(((h >>> 10) & 1023) / 1024);   // q: share of the way to the edge
-    const d = q * c.r * townShape(c.r, Math.cos(ang), Math.sin(ang)), x = d * Math.cos(ang), y = d * Math.sin(ang);
-    const height = 300 + 1200 * (1 - q) ** 2 * (0.4 + 0.6 * (h2 & 255) / 255), w = 60 + 60 * ((h2 >>> 8) & 255) / 255;
-    m.setMatrixAt(i, M.compose(p.set(-y, x * x / (2 * R) - 2, -x), one, sc.set(w, height, w)));   // the floor curves up by x²/2R
-    m.setColorAt(i, col);
+  const lots = { round: [], slab: [] };
+  for (let i = -40; i <= 40; i++) for (let j = -40; j <= 40; j++) {
+    const h = tHash(i, j, 4000 + (c.a | 0)), r1 = (h & 1023) / 1023, r2 = ((h >>> 10) & 1023) / 1023, r3 = ((h >>> 20) & 255) / 255;
+    const x = i * 250 + 80 * (r3 - 0.5), y = j * 250 + 80 * (r1 - 0.5), P = megaPlan(c, x, y);
+    if (P.road || P.park || P.zone > 2 || r1 > [0.85, 0.4, 0.08][P.zone]) continue;
+    const height = [600 + 900 * r2 * r2, 250 + 400 * r2, 120 + 180 * r2][P.zone], w = [90, 60, 40][P.zone] * (1 + 0.6 * r3);
+    lots[r3 < 0.45 ? 'slab' : 'round'].push({ x, y, height, w, ang: Math.atan2(y, x), tint: TOWER_TINTS[(h >>> 28) % 3] });
   }
-  m.frustumCulled = false;
-  c.pos = ringPoint(c.a, c.u, c.h, new THREE.Vector3());
   c.grp = new THREE.Group();
+  for (const [form, list] of Object.entries(lots)) {
+    const m = new THREE.InstancedMesh(form === 'slab' ? SLAB : FORMS.tower, buildingMat, list.length), M = new THREE.Matrix4(),
+          p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), Yax = new THREE.Vector3(0, 1, 0);
+    list.forEach((t, k) => {
+      q.setFromAxisAngle(Yax, t.ang + Math.PI / 2);   // slabs run along the ring roads
+      m.setMatrixAt(k, M.compose(p.set(-t.y, t.x * t.x / (2 * R) - 2, -t.x), q, sc.set(t.w, t.height, form === 'slab' ? t.w * 1.8 : t.w)));   // the floor curves up by x²/2R
+      m.setColorAt(k, t.tint);
+    });
+    m.frustumCulled = false;
+    c.grp.add(m);
+  }
+  c.pos = ringPoint(c.a, c.u, c.h, new THREE.Vector3());
   c.grp.quaternion.copy(levelQ(c.a, new THREE.Quaternion()));
-  c.grp.add(m);
   scene.add(c.grp);
 }
 
