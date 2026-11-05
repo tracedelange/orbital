@@ -81,14 +81,14 @@ The page changes its render resolution to hold about 50 fps. Medium and High nev
 
 You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
-The ring has a few fixed landmarks: one mountain about 22 km tall, 400 km east of the first GSV; two super cities with skylines of towers up to 1.5 km; and three places where the land strip gives way to sea and islands.
+The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 400 km east of the first GSV), two super cities with skylines of towers up to 1.5 km, and seven straits where the land strip gives way to sea and islands. A ◆ marker with the distance shows each peak and super city within 2,000 km.
 
 ## Notes for an agent
 
 - Units are metres. The ring axis is Y, and the floor is the inside of a cylinder at radius `R = 1e7`.
 - The camera stays at the origin. Its true position is `camPos`, in JS doubles. Every object is drawn at its position minus `camPos`. This keeps GPU numbers small.
 - The terrain noise runs in the vertex shader. `terrainAt()` in JS gives the same heights, for the ship and the walker. If you change one, change the other.
-- Landmarks are in `MOUNTAIN`, `STRAITS` and `MEGAS` at the top of the script. The terrain shader and `terrainAt()` both read them. Keep them clear of the terrain patches that the GSV decks copy (`k0` in `GSVS`).
+- Landmarks are in `MEGAS`, `PEAKS` and `STRAITS` at the top of the script. A fixed seed places all peaks except the first, and all straits, clear of the GSVs, the terrain patches that their decks copy (`k0` in `GSVS`) and the cities. The terrain shader and `terrainAt()` both read them. Tile culling and LOD add a peak's height to tiles near it.
 - The GSV deck draws a patch of the ring terrain flat, with the `DECK` shader define. `deckH()` is its JS twin.
 - The relay has no game logic. One Durable Object, `Relay`, holds every socket. It tags each socket with its room (`ROOM_MAX` 8, `MAX_ROOMS` 20). It checks names, builds each pose again from the known fields, masks chat with the `obscenity` package, and drops messages over the rate limit (30 a second, 1 chat a second, 1 KB maximum). Then it sends each message to the other sockets in the same room.
 - The relay uses WebSocket hibernation. Memory can be erased between messages, so all state for each socket is in its attachment.
