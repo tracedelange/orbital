@@ -1288,6 +1288,7 @@ const groundUp = new THREE.Vector3();       // up at the surface under the ship,
 const speedCap = () => Math.min(SHIP_MAX, 50 + Q.speedK * shipAlt);
 
 let mode = 'ship', walkSpeed = 8, muted = false, mapOpen = false;
+const WALK_MAX = 30;   // scroll can raise walk speed up to this (m/s, about 67 mph)
 const JUMP_V = 5;   // jump launch speed (m/s), kept apart from walk speed so faster walking doesn't mean higher jumps
 const player = { a: 0, u: 0, yaw: 0, pitch: 0, z: 0, vz: 0, gsv: null }; // z: height above ground while jumping; gsv: the GSV whose deck they're on
 const keys = new Set();
@@ -2029,7 +2030,9 @@ addEventListener('mousemove', e => {
   }
 });
 addEventListener('keydown', e => {
-  if (e.code === 'Escape' && !menu.hidden) return resume();   // Esc opens the menu (by freeing the mouse) and closes it
+  // Esc opens the menu (by freeing the mouse) and closes it. The keypress that freed the mouse can arrive
+  // just after the menu opens; ignore it, or the menu would close at once with the mouse still free.
+  if (e.code === 'Escape' && !menu.hidden) return performance.now() - menuAt > 300 ? resume() : undefined;
   if (e.code === 'Escape' && mapOpen) return setMap(false);
   if (e.target.tagName === 'INPUT' || !landing.hidden || !menu.hidden) return;   // typing, or a card is open
   if (e.code === 'Enter') return openChat();
@@ -2045,7 +2048,7 @@ addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('wheel', e => {
   const k = e.deltaY < 0 ? 1.25 : 1 / 1.25;
   if (mapOpen) mapZoom = clamp(mapZoom * k, 1, 300);
-  else if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, 1e5); updateHud(); }
+  else if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, WALK_MAX); updateHud(); }
   else shipSpeed = clamp(Math.max(shipSpeed, 4) * k, 0, SHIP_MAX);
 });
 addEventListener('resize', () => {
@@ -2772,14 +2775,17 @@ document.addEventListener('pointerlockchange', () => {
   if (!locked && mapOpen) return setMap(false);   // with the map open, Esc closes the map instead; a click takes the mouse back
   menu.hidden = locked || !landing.hidden || !chatIn.hidden;
   if (!menu.hidden) {
+    menuAt = performance.now();
     keys.clear();   // keys held now would never see their keyup
     menuName.value = myName ?? '';
     document.getElementById('renameRow').hidden = !myName;
   }
 });
+let menuAt = 0;
 function resume() {
   menu.hidden = true;
-  try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch {}
+  // The browser can refuse the lock (too soon after Esc, or no user gesture); then keep the menu up.
+  try { renderer.domElement.requestPointerLock()?.catch?.(() => { menu.hidden = false; }); } catch { menu.hidden = false; }
 }
 document.getElementById('resume').onclick = resume;
 document.getElementById('sound').onchange = e => { muted = !e.target.checked; };
