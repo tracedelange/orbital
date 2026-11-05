@@ -64,15 +64,19 @@ Click the scene to capture the mouse. Press Esc to release it.
 | V | In the ship: land and step out. On foot: get in and lift off |
 | O | Overview of the whole ring |
 | L | Turn the ship's headlight on or off |
-| M | Turn sound on or off. Sound starts after your first click. |
+| M | Open or close the system map |
 | Enter | Open the chat box |
 | N | Cycle the HUD: everything, player labels only, then nothing but chat |
+
+The system map is a hologram of the ring, the sun, the moon, the GSVs, the spaceports, the super cities, the peaks and every player in your room, with their speed. It shows the day and night sides of the ring. It draws over the game, and the game keeps going. While the map is open, the mouse turns the map and scroll zooms in on you. The keys still fly the ship, and the ship keeps its heading. Clock numbers around the ring match the player list.
 
 When you press V in the ship, it flies itself down to the ground a little ahead, levels out, puts its legs down and lands. Then you step out beside it. When you press V on foot near the landed ship, you get in and it lifts off. Farther away, the ship comes down beside you first.
 
 If the ship hits the ground or a GSV deck slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site. The chat of your room shows that you crashed.
 
-The top-right box shows the speed and the altitude. Esc frees the mouse and opens the menu. The menu has Resume, a name field to rename (the room sees the change, at most once every 10 seconds), the ship colours, and these settings:
+The top-right box shows the speed and the altitude. Esc frees the mouse and opens the menu. Esc again closes it. The menu has Resume, a name field to rename (the room sees the change, at most once every 10 seconds), the ship colours, and these settings:
+
+- **Sound** turns sound on or off. Sound starts after your first click.
 
 - **Quality** is Auto, Low, Medium or High. Auto plays the first 10 seconds on Medium, then picks a preset from the frame rate. The page keeps the choice for the next visit.
 - **LOD detail** sets how much terrain detail the page draws. A lower value is faster. Each preset sets it.

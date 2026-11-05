@@ -19,7 +19,7 @@
   #flight { display: inline-block; vertical-align: top; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; }
   #flight b { color: #fff; font-size: 15px; }
   #flight span { color: #8fa0b8; }
-  #menu[hidden], #landing[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
+  #menu[hidden], #landing[hidden], #map[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
   /* Esc menu: opens whenever the mouse is free (outside chat and the landing card). */
   #menu { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box;
     background: rgba(2,3,10,0.55); color: #e6edf6; font: 13px/1.5 ui-monospace, Menlo, monospace; }
@@ -67,7 +67,11 @@
   #landing input, #landing button { font: inherit; padding: 8px 10px; border-radius: 4px; border: 1px solid #4a5568; background: #0b0f18; color: #fff; }
   #landing button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
   /* N cycles the HUD: 3 everything, 2 player labels only, 1 nothing but chat. */
-  body[data-hud="2"] .poi, body[data-hud="1"] .peer { visibility: hidden; }
+  body[data-hud="2"] .poi, body[data-hud="1"] .peer, body.map .peer { visibility: hidden; }
+  #map { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 60%, rgba(0,40,55,0.6), rgba(2,6,12,0.9) 75%); }
+  #map canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #map canvas:first-child { filter: drop-shadow(0 0 3px rgba(79,227,255,0.8)); }
+  #map::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, rgba(120,230,255,0.05) 0 1px, transparent 1px 3px); }
   body[data-hud="1"] :is(#hud, #perf, #net) { display: none; }
   .peer {
     position: fixed; left: 0; top: 0; color: #ffd59a; pointer-events: none; white-space: nowrap;
@@ -82,6 +86,7 @@
 </script>
 </head>
 <body>
+<div id="map" hidden><canvas id="mapLabels"></canvas></div>
 <div id="hud"></div>
 <div id="net"></div>
 <form id="landing">
@@ -105,6 +110,7 @@
     <h3>Display</h3>
     <label>Quality <select id="quality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
     <label>LOD detail <span id="lodLabel"></span><input id="lod" type="range" min="1" max="4" step="0.25" value="2"></label>
+    <label><input type="checkbox" id="sound" checked> Sound</label>
     <div id="fps">– fps</div>
     <div id="stats"></div>
   </div>
@@ -1265,7 +1271,7 @@ const groundUp = new THREE.Vector3();       // up at the surface under the ship,
 // Above the cap, speed bleeds off over about a second.
 const speedCap = () => Math.min(SHIP_MAX, 50 + Q.speedK * shipAlt);
 
-let mode = 'ship', walkSpeed = 5, muted = false;
+let mode = 'ship', walkSpeed = 5, muted = false, mapOpen = false;
 const player = { a: 0, u: 0, yaw: 0, pitch: 0, z: 0, vz: 0, gsv: null }; // z: height above ground while jumping; gsv: the GSV whose deck they're on
 const keys = new Set();
 
@@ -1983,7 +1989,10 @@ function updateWalk(dt) {
 renderer.domElement.addEventListener('click', () => { renderer.domElement.requestPointerLock(); startAudio(); });
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
-  if (mode === 'walk') {
+  if (mapOpen) {   // the map takes the mouse; the ship holds its heading
+    mapYaw += e.movementX * 0.004;
+    mapTilt = clamp(mapTilt + e.movementY * 0.004, -1.5, 1.5);   // short of straight down, where lookAt flips
+  } else if (mode === 'walk') {
     player.yaw -= e.movementX * 0.002;
     player.pitch = clamp(player.pitch - e.movementY * 0.002, -1.5, 1.5);
   } else if (keys.has('Space') || auto) {   // free look: swing the camera around the ship (and while it lands itself)
@@ -1996,6 +2005,7 @@ addEventListener('mousemove', e => {
   }
 });
 addEventListener('keydown', e => {
+  if (e.code === 'Escape' && !menu.hidden) return resume();   // Esc opens the menu (by freeing the mouse) and closes it
   if (e.target.tagName === 'INPUT' || !landing.hidden || !menu.hidden) return;   // typing, or a card is open
   if (e.code === 'Enter') return openChat();
   keys.add(e.code);
@@ -2003,12 +2013,13 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyO') overview();
   if (e.code === 'KeyN') { hudLevel = hudLevel === 1 ? 3 : hudLevel - 1; document.body.dataset.hud = hudLevel; updateHud(); }
   if (e.code === 'KeyL') { headlight.intensity = headlight.intensity ? 0 : 3; updateHud(); }   // intensity, not visible: no shader rebuild
-  if (e.code === 'KeyM') { muted = !muted; updateHud(); }
+  if (e.code === 'KeyM') { mapOpen = !mapOpen; mapEl.hidden = !mapOpen; document.body.classList.toggle('map', mapOpen); updateHud(); }
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('wheel', e => {
   const k = e.deltaY < 0 ? 1.25 : 1 / 1.25;
-  if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, 1e5); updateHud(); }
+  if (mapOpen) mapZoom = clamp(mapZoom * k, 1, 300);
+  else if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, 1e5); updateHud(); }
   else shipSpeed = clamp(Math.max(shipSpeed, 4) * k, 0, SHIP_MAX);
 });
 addEventListener('resize', () => {
@@ -2024,7 +2035,7 @@ function updateHud() {
   const top = mode === 'walk'
     ? `<b>WALK</b> &nbsp; <b>Click</b> look &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump &nbsp; <b>Scroll</b> speed (${fmtSpeed(walkSpeed)})<br>`
     : `<b>SHIP</b> &nbsp; <b>Click</b> steer &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll &nbsp; hold <b>Space</b> look &nbsp; <b>Esc</b> frees the mouse<br>`;
-  hud.innerHTML = top + `<b>V</b> land/board &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> HUD (${['', 'off', 'players', 'all'][hudLevel]}) &nbsp; <b>L</b> headlight &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
+  hud.innerHTML = top + `<b>V</b> land/board &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> HUD (${['', 'off', 'players', 'all'][hudLevel]}) &nbsp; <b>L</b> headlight &nbsp; <b>M</b> map${mapOpen ? ' (mouse spins, scroll zooms)' : ''}`;
 }
 spawn();
 
@@ -2591,6 +2602,7 @@ function resume() {
   try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch {}
 }
 document.getElementById('resume').onclick = resume;
+document.getElementById('sound').onchange = e => { muted = !e.target.checked; };
 menu.onclick = e => { if (e.target === menu) resume(); };
 document.getElementById('rename').onclick = () => {
   if (menuName.value.trim() !== myName) ws.send(JSON.stringify({ type: 'name', name: menuName.value }));
@@ -2632,6 +2644,147 @@ function whereIs(p) {
   return `${h || 12} o'clock`;
 }
 setInterval(updateNet, 1000);
+
+// --- System map (M) ---
+// A hologram of the system over the live scene, like a chart table on a ship's deck: its own small three.js
+// renderer and scene in ring units (1 = R), drawn as additive glowing lines over a dimmed, scanlined
+// backdrop (CSS), with a 2D canvas on top for the labels. The ring axis is up, so the ring lies flat over a
+// projector disc. The mouse orbits the view (mapYaw, mapTilt = elevation), scroll zooms in on you, and the
+// keys still fly. The sun is a green wireframe core with flickering panels inside a lat-long cage.
+const mapEl = document.getElementById('map'), mapLbl = document.getElementById('mapLabels'), mapCtx = mapLbl.getContext('2d');
+const mapGl = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+mapGl.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+mapEl.prepend(mapGl.domElement);
+const mapScene = new THREE.Scene(), mapCam = new THREE.PerspectiveCamera(35, 1, 0.001, 50);
+let mapYaw = 0, mapTilt = 0.45, mapZoom = 1;
+const HOLO = 0x4fe3ff, SUNG = 0x39ff88;
+const glow = (color, opacity = 1, extra = {}) => ({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, ...extra });
+const lines = (pts, mat) => new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)), mat);
+function latLong(r, nLat, nLon, seg = 48) {   // line positions for a lat-long cage
+  const p = [], at = (la, lo) => [r * Math.cos(la) * Math.cos(lo), r * Math.sin(la), r * Math.cos(la) * Math.sin(lo)];
+  for (let i = 1; i < nLat; i++) { const la = -Math.PI / 2 + i / nLat * Math.PI; for (let k = 0; k < seg; k++) p.push(...at(la, k / seg * 2 * Math.PI), ...at(la, (k + 1) / seg * 2 * Math.PI)); }
+  for (let j = 0; j < nLon; j++) { const lo = j / nLon * 2 * Math.PI; for (let k = 0; k < seg; k++) p.push(...at(-Math.PI / 2 + k / seg * Math.PI, lo), ...at(-Math.PI / 2 + (k + 1) / seg * Math.PI, lo)); }
+  return p;
+}
+
+// Ring: edge circles of the floor and wall tops, cross ribs, and a faint floor fill. Vertex colours carry
+// daylight, so the night side glows dimmer; mapDay() refreshes them.
+const MAP_N = 192, hw = HW / R, wl = WALL / R, ringTh = [], ringPts = [];
+const rp = (th, u, h) => [(1 - h) * Math.cos(th), u, (1 - h) * Math.sin(th)];
+for (let i = 0; i < MAP_N; i++) {
+  const t0 = i / MAP_N * 2 * Math.PI, t1 = (i + 1) / MAP_N * 2 * Math.PI;
+  for (const [u, h] of [[hw, 0], [-hw, 0], [hw, wl], [-hw, wl]]) { ringPts.push(...rp(t0, u, h), ...rp(t1, u, h)); ringTh.push(t0, t1); }
+  if (i % 2 === 0) for (const [a, b] of [[[-hw, 0], [hw, 0]], [[hw, 0], [hw, wl]], [[-hw, 0], [-hw, wl]]]) { ringPts.push(...rp(t0, ...a), ...rp(t0, ...b)); ringTh.push(t0, t0); }
+}
+const ringLines = lines(ringPts, new THREE.LineBasicMaterial(glow(0xffffff, 0.9, { vertexColors: true })));
+ringLines.geometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(ringTh.length * 3), 3));
+const floorGeo = new THREE.CylinderGeometry(1, 1, 2 * hw, MAP_N, 1, true);
+floorGeo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(floorGeo.attributes.position.count * 3), 3));
+const floorFill = new THREE.Mesh(floorGeo, new THREE.MeshBasicMaterial(glow(0xffffff, 0.12, { vertexColors: true, side: THREE.DoubleSide })));
+const holo = new THREE.Color(HOLO), dim = new THREE.Color();
+function mapDay() {
+  const c = ringLines.geometry.attributes.color;
+  for (let i = 0; i < ringTh.length; i++) { dim.copy(holo).multiplyScalar(0.18 + 0.82 * dayFactor(ringTh[i])); c.setXYZ(i, dim.r, dim.g, dim.b); }
+  c.needsUpdate = true;
+  const fp = floorGeo.attributes.position, fc = floorGeo.attributes.color;
+  for (let i = 0; i < fp.count; i++) { dim.copy(holo).multiplyScalar(0.1 + 0.9 * dayFactor(Math.atan2(fp.getZ(i), fp.getX(i)))); fc.setXYZ(i, dim.r, dim.g, dim.b); }
+  fc.needsUpdate = true;
+}
+
+// Sun: a wireframe icosahedron core, a shell of triangle panels that switch on and off, and a cage turning
+// the other way.
+const sun = new THREE.Group();
+sun.add(new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(0.045, 1)), new THREE.LineBasicMaterial(glow(SUNG, 0.5))));
+const panelGeo = new THREE.IcosahedronGeometry(0.052, 2);
+panelGeo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(panelGeo.attributes.position.count * 3), 3));
+const panels = new THREE.Mesh(panelGeo, new THREE.MeshBasicMaterial(glow(0xffffff, 0.25, { vertexColors: true, side: THREE.DoubleSide })));
+sun.add(panels, new THREE.LineSegments(new THREE.WireframeGeometry(panelGeo), new THREE.LineBasicMaterial(glow(SUNG, 0.12))));
+const sunCage = lines(latLong(0.075, 8, 12), new THREE.LineBasicMaterial(glow(SUNG, 0.18)));
+sun.scale.setScalar(0.6); sunCage.scale.setScalar(0.6);   // kept small and dim so the ring stays the subject
+const sunG = new THREE.Color(SUNG);
+function flickerPanels(p) {   // each triangle face is lit or dark; a share p of them roll again each call
+  const c = panelGeo.attributes.color;
+  for (let f = 0; f < c.count / 3; f++) {
+    if (Math.random() > p) continue;
+    const k = Math.random() < 0.35 ? 0.4 + 0.6 * Math.random() : 0;
+    for (let v = 0; v < 3; v++) c.setXYZ(f * 3 + v, sunG.r * k, sunG.g * k, sunG.b * k);
+  }
+  c.needsUpdate = true;
+}
+flickerPanels(1);
+
+// Moon, projector disc, landmarks and players.
+const mapMoon = lines(latLong(MOON.r / R, 6, 10, 24), new THREE.LineBasicMaterial(glow(0xcfe8ff, 0.6)));
+mapMoon.position.copy(MOON.c).divideScalar(R);
+const discPts = [], DISC_Y = -0.45;
+for (const r of [0.25, 0.6, 1, 1.18]) for (let k = 0; k < 96; k++) discPts.push(r * Math.cos(k / 96 * 2 * Math.PI), DISC_Y, r * Math.sin(k / 96 * 2 * Math.PI), r * Math.cos((k + 1) / 96 * 2 * Math.PI), DISC_Y, r * Math.sin((k + 1) / 96 * 2 * Math.PI));
+for (let k = 0; k < 24; k++) { const a = k / 24 * 2 * Math.PI; discPts.push(0.25 * Math.cos(a), DISC_Y, 0.25 * Math.sin(a), 1.18 * Math.cos(a), DISC_Y, 1.18 * Math.sin(a)); }
+const disc = lines(discPts, new THREE.LineBasicMaterial(glow(HOLO, 0.15)));
+const ptsOf = (list, color, size) => new THREE.Points(new THREE.BufferGeometry().setFromPoints(list.map(v => v.clone().divideScalar(R))),
+  new THREE.PointsMaterial(glow(color, 1, { size, sizeAttenuation: false })));
+const mega = c => ringPoint(c.a, c.u, 0, new THREE.Vector3()), peakV = P => ringPoint(P.a, P.u, P.h, new THREE.Vector3());
+const PLAYER_MAX = 16, playerPts = new THREE.Points(new THREE.BufferGeometry()
+  .setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(PLAYER_MAX * 3), 3))
+  .setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(PLAYER_MAX * 3), 3)),
+  new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, vertexColors: true, transparent: true, depthTest: false }));
+const heading = lines([0, 0, 0, 0, 0, 0], new THREE.LineBasicMaterial(glow(0xffffff, 0.9, { depthTest: false })));
+mapScene.add(ringLines, floorFill, sun, sunCage, mapMoon, disc, ptsOf([...GSVS, ...PORTS].map(s => s.pos), HOLO, 4),
+  ptsOf(MEGAS.map(mega), 0xffcf6b, 7), ptsOf(PEAKS.map(peakV), 0xffffff, 4), playerPts, heading);
+
+// Labels on the 2D canvas, projected with the hologram camera.
+const mapV = new THREE.Vector3(), mapW = new THREE.Vector3(), mapTarget = new THREE.Vector3();
+let mapDayT = 0, mapFlickT = 0;
+function drawMap(dt) {
+  const W = innerWidth, H = innerHeight, dpr = devicePixelRatio, me = mode === 'walk' ? camPos : shipPos;
+  if (mapLbl.width !== Math.round(W * dpr)) { mapLbl.width = Math.round(W * dpr); mapLbl.height = Math.round(H * dpr); mapGl.setSize(W, H); }
+  if (mapLbl.height !== Math.round(H * dpr)) { mapLbl.height = Math.round(H * dpr); mapGl.setSize(W, H); }
+  if ((mapDayT -= dt) < 0) { mapDayT = 1; mapDay(); }
+  if ((mapFlickT -= dt) < 0) { mapFlickT = 0.12; flickerPanels(0.12); }
+  sun.rotation.y += dt * 0.3; sunCage.rotation.y -= dt * 0.15;
+
+  // Camera orbits a target that slides from the axis to you as you zoom in.
+  const dist = 3.4 / mapZoom;
+  mapTarget.copy(me).divideScalar(R).multiplyScalar(1 - 1 / mapZoom);
+  mapCam.position.set(Math.cos(mapTilt) * Math.sin(mapYaw), Math.sin(mapTilt), Math.cos(mapTilt) * Math.cos(mapYaw)).multiplyScalar(dist).add(mapTarget);
+  mapCam.near = dist * 0.01; mapCam.aspect = W / H; mapCam.updateProjectionMatrix();
+  mapCam.lookAt(mapTarget);
+
+  // Players: you first, then the room.
+  const pp = playerPts.geometry.attributes.position, pc = playerPts.geometry.attributes.color, tags = [];
+  const add = (pos, color, text) => { const i = tags.length; if (i >= PLAYER_MAX) return; mapV.copy(pos).divideScalar(R); pp.setXYZ(i, mapV.x, mapV.y, mapV.z); pc.setXYZ(i, color.r, color.g, color.b); tags.push([mapV.clone(), text, '#' + color.getHexString()]); };
+  add(me, hullMat.color, `${myName ?? 'you'} · ${mode === 'walk' ? 'walking' : fmtSpeed(shipSpeed)}`);
+  for (const p of peers.values()) {
+    const sn = p.snaps[p.snaps.length - 1], prev = p.snaps[p.snaps.length - 2];
+    if (!sn) continue;
+    const v = prev ? mapV.fromArray(sn.s).distanceTo(mapW.fromArray(prev.s)) / Math.max(0.001, (sn.t - prev.t) / 1000) : 0;
+    add(mapW.fromArray(sn.w ?? sn.s), p.hull.color, `${p.name} · ${sn.w ? 'walking' : fmtSpeed(v)}`);
+  }
+  playerPts.geometry.setDrawRange(0, tags.length);
+  pp.needsUpdate = pc.needsUpdate = true;
+  camera.getWorldDirection(mapW);
+  const hp = heading.geometry.attributes.position, h0 = tags[0][0];
+  hp.setXYZ(0, h0.x, h0.y, h0.z); hp.setXYZ(1, h0.x + mapW.x * dist * 0.04, h0.y + mapW.y * dist * 0.04, h0.z + mapW.z * dist * 0.04);
+  hp.needsUpdate = true; heading.geometry.computeBoundingSphere();
+  mapGl.domElement.style.opacity = Math.random() < 0.03 ? 0.75 : 1;   // the odd flicker
+  mapGl.render(mapScene, mapCam);
+
+  const g = mapCtx;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  g.textAlign = 'center'; g.textBaseline = 'bottom'; g.shadowBlur = 6;
+  const label = (v, text, color, size = 11) => {
+    mapV.copy(v).project(mapCam);
+    if (mapV.z > 1 || Math.abs(mapV.x) > 1.1 || Math.abs(mapV.y) > 1.1) return;
+    g.font = `${size}px ui-monospace, Menlo, monospace`; g.fillStyle = g.shadowColor = color;
+    g.fillText(text, (mapV.x + 1) / 2 * W, (1 - mapV.y) / 2 * H - 7);
+  };
+  for (let k = 1; k <= 12; k++) label(mapW.set(...rp(k / 12 * 2 * Math.PI, 0, -0.1)), k, '#4fe3ff', 12);
+  label(mapW.set(0, 0.055, 0), 'sun', '#39ff88');
+  label(mapMoon.position, 'moon', '#cfe8ff');
+  for (const c of MEGAS) label(mega(c).divideScalar(R), c.name.toUpperCase(), '#ffcf6b', 12);
+  if (mapZoom >= 4) for (const s of [...GSVS, ...PORTS]) label(mapW.copy(s.pos).divideScalar(R), s.name, '#4fe3ff', 10);
+  for (const [v, text, color] of tags) label(v, text, color, 12);
+}
 ws.onopen = updateNet;
 ws.onclose = () => { joinName.hidden = true; joinMsg.textContent = ''; updateNet(); };
 ws.onmessage = e => {
@@ -2815,6 +2968,7 @@ renderer.setAnimationLoop(() => {
   updateTowns();
   updateShrubs();
   updateBuildings();
+  if (mapOpen) drawMap(dt);
 
   frames++;
   const now = performance.now();
