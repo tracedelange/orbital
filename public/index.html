@@ -19,6 +19,8 @@
   #flight { display: inline-block; vertical-align: top; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; }
   #flight b { color: #fff; font-size: 15px; }
   #flight span { color: #8fa0b8; }
+  #flight:empty { display: none; }
+  #tape { position: fixed; right: 16px; top: 50%; transform: translateY(-50%); width: 56px; height: 240px; pointer-events: none; }
   #menu[hidden], #landing[hidden], #map[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
   /* Esc menu: opens whenever the mouse is free (outside chat and the landing card). */
   #menu { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box;
@@ -44,7 +46,11 @@
   #landing p { margin: 0; max-width: 460px; color: #b8c4d6; }
   #landing .keys { font-size: 12px; color: #8fa0b8; }
   #landing .keys b { color: #cfd8e6; }
-  body:has(#landing:not([hidden])) :is(#hud, #perf, #net, #chat) { display: none; }
+  #landing .spinner { display: none; width: 28px; height: 28px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #e6edf6; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  #landing.loading .spinner { display: block; }
+  #landing.loading :is(.row, .swatches, #joinMsg, .keys) { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  body:has(#landing:not([hidden])) :is(#hud, #perf, #net, #chat, #tape) { display: none; }
   #net .who { color: #8fa0b8; }
   #net {
     position: fixed; left: 16px; top: 16px; color: #cfd8e6;
@@ -68,11 +74,13 @@
   #landing button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
   /* N cycles the HUD: 3 everything, 2 player labels only, 1 nothing but chat. */
   body[data-hud="2"] .poi, body[data-hud="1"] .peer, body.map .peer { visibility: hidden; }
-  #map { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 60%, rgba(0,40,55,0.6), rgba(2,6,12,0.9) 75%); }
+  #map { position: fixed; inset: 0; pointer-events: none; background: #000; }
+  body.map :is(#hud, #perf, #tape) { display: none; }
   #map canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   #map canvas:first-child { filter: drop-shadow(0 0 3px rgba(79,227,255,0.8)); }
   #map::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, rgba(120,230,255,0.05) 0 1px, transparent 1px 3px); }
-  body[data-hud="1"] :is(#hud, #perf, #net) { display: none; }
+  body[data-hud="1"] :is(#hud, #perf, #net, #tape) { display: none; }
+  .peer.way { color: #7fffd4; }
   .peer {
     position: fixed; left: 0; top: 0; color: #ffd59a; pointer-events: none; white-space: nowrap;
     font: 12px ui-monospace, Menlo, monospace; text-shadow: 0 0 3px #000;
@@ -89,9 +97,10 @@
 <div id="map" hidden><canvas id="mapLabels"></canvas></div>
 <div id="hud"></div>
 <div id="net"></div>
-<form id="landing">
+<form id="landing" class="loading">
   <h1>Culture Orbital</h1>
   <p>A ring world 20,000 km across, in the spirit of Iain M. Banks's Culture. Fly it, walk it, and meet whoever else is here.</p>
+  <div class="spinner"></div>
   <div class="row"><input id="joinName" maxlength="20" placeholder="Your name" autocomplete="off" autofocus><button>Fly</button></div>
   <div class="swatches"></div>
   <div id="joinMsg"></div>
@@ -99,6 +108,7 @@
 </form>
 <div id="chat"><div id="chatLog"></div><input id="chatIn" maxlength="200" placeholder="Say something · Enter sends · Esc closes" autocomplete="off" hidden></div>
 <div id="perf"><div id="flight"></div></div>
+<canvas id="tape"></canvas>
 <div id="menu" hidden>
   <div class="card">
     <h2>Menu</h2>
@@ -1644,6 +1654,7 @@ function spawn() {
   camQ.copy(shipQ);
   shipSpeed = 100;
   mode = 'ship';
+  headlight.intensity = dayFactor(a / R) > 0.5 ? 0 : 3;   // off in daylight; L turns it on
   updateHud();
 }
 
@@ -1881,7 +1892,13 @@ function updateShip(dt) {
   shipQ.normalize();
 
   fwd.set(0, 0, -1).applyQuaternion(shipQ);
-  shipPos.addScaledVector(fwd, shipSpeed * dt);
+  const step = shipSpeed * dt, hit = hitSolids(shipPos, fwd, step + SOLID_GAP);
+  shipPos.addScaledVector(fwd, step);
+  if (hit) {   // GSV hull or spaceport: push back out to SOLID_GAP in front of the face, so the ship slides along it
+    const d = pv.copy(shipPos).sub(hit.p).dot(hit.n);
+    if (d < SOLID_GAP) shipPos.addScaledVector(hit.n, SOLID_GAP - d);
+    if (impact(shipSpeed * Math.max(-fwd.dot(hit.n), 0), hit.n)) return;
+  }
 
   // Keep above the ground or water while over the floor.
   const r = Math.hypot(shipPos.x, shipPos.z);
@@ -2008,6 +2025,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Escape' && !menu.hidden) return resume();   // Esc opens the menu (by freeing the mouse) and closes it
   if (e.target.tagName === 'INPUT' || !landing.hidden || !menu.hidden) return;   // typing, or a card is open
   if (e.code === 'Enter') return openChat();
+  if (e.code === 'Tab') { e.preventDefault(); if (mapOpen) cycleWay(); return; }
   keys.add(e.code);
   if (e.code === 'KeyV' && !auto && boom.t < 0) mode === 'walk' ? toShip() : startLanding();
   if (e.code === 'KeyO') overview();
@@ -2035,7 +2053,7 @@ function updateHud() {
   const top = mode === 'walk'
     ? `<b>WALK</b> &nbsp; <b>Click</b> look &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump &nbsp; <b>Scroll</b> speed (${fmtSpeed(walkSpeed)})<br>`
     : `<b>SHIP</b> &nbsp; <b>Click</b> steer &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll &nbsp; hold <b>Space</b> look &nbsp; <b>Esc</b> frees the mouse<br>`;
-  hud.innerHTML = top + `<b>V</b> land/board &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> HUD (${['', 'off', 'players', 'all'][hudLevel]}) &nbsp; <b>L</b> headlight &nbsp; <b>M</b> map${mapOpen ? ' (mouse spins, scroll zooms)' : ''}`;
+  hud.innerHTML = top + `<b>V</b> land/board &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> HUD (${['', 'off', 'players', 'all'][hudLevel]}) &nbsp; <b>L</b> headlight &nbsp; <b>M</b> map`;
 }
 spawn();
 
@@ -2346,7 +2364,7 @@ function vnoise3(x, y, z, seed) {   // value noise in -1..1
 }
 // Height above radius MOON.r along unit direction d. Craters sit in the cells of a cube-face grid at four
 // sizes (a bowl with a raised rim; about 40% of cells hold one), over rolling ground.
-function moonH(d) {
+function moonH0(d) {
   const ax = Math.abs(d.x), ay = Math.abs(d.y), az = Math.abs(d.z);
   let face, u, v;
   if (ax >= ay && ax >= az) { face = d.x > 0 ? 0 : 1; u = d.y / ax; v = d.z / ax; }
@@ -2364,6 +2382,17 @@ function moonH(d) {
     }
   }
   return h;
+}
+// The observatory sits on ground flattened to the height at its centre (out to 1.2 km, blending by 2.5 km).
+// Its site is on the side of the moon away from the near arc of the ring, tilted so that arc stands about
+// 20° over the horizon in front of the deck, with the far arc and the sun high behind.
+const OBS = { name: 'Observatory', d: new THREE.Vector3(-0.6 * Math.cos(0.3), -1, -0.6 * Math.sin(0.3)).normalize() };
+OBS.h0 = moonH0(OBS.d);
+OBS.pos = MOON.c.clone().addScaledVector(OBS.d, MOON.r + OBS.h0);
+const OBS_C0 = Math.cos(1200 / MOON.r), OBS_C1 = Math.cos(2500 / MOON.r);
+function moonH(d) {
+  const h = moonH0(d), k = smoothstep(d.dot(OBS.d), OBS_C1, OBS_C0);
+  return h + (OBS.h0 - h) * k;
 }
 // Moon materials: lit by the sun like everything else, but its day factor is the moon's own (uMoonDay).
 // The whole-moon mesh sinks 3 km inside uSink's cone (the detailed patch under the camera) so the two don't fight.
@@ -2440,6 +2469,41 @@ function updateMoon() {
     moonPatch.visible = false;
     moonSink.value.w = 2;   // nothing sinks
   }
+  obs.position.copy(OBS.pos).sub(camPos);
+  obs.visible = obs.position.length() < 3e5;
+  OBS.beacon.visible = performance.now() % 2000 < 300;
+}
+// --- Observatory: a plaza with a domed hall and telescope, a terrace with a glass rail and benches facing
+// the ring, a landing pad and a beacon. Local frame: +Y up from the moon, -Z toward the near arc. No collision.
+const obs = new THREE.Group();
+{
+  const white = withDay(new THREE.MeshStandardMaterial({ color: 0xe8ecf0, roughness: 0.5, metalness: 0.2 }), 'local');
+  const grey = withDay(new THREE.MeshStandardMaterial({ color: 0x80858e, roughness: 0.9 }), 'local');
+  const pale = withDay(new THREE.MeshStandardMaterial({ color: 0xc4c8ce, roughness: 0.8 }), 'local');
+  const glass = new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.25, roughness: 0.1, metalness: 0.5, side: THREE.DoubleSide, depthWrite: false });
+  const warm = new THREE.MeshBasicMaterial({ color: 0xffd9a0 }), cool = new THREE.MeshBasicMaterial({ color: 0x7fd4ff });
+  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); obs.add(m); return m; };
+  const FRONT = [Math.PI / 2, Math.PI];   // cylinder theta range for the half facing -Z
+  add(new THREE.CylinderGeometry(170, 176, 6, 64), grey, 0, -3, 0);                       // plaza, top flush with the ground
+  add(new THREE.CylinderGeometry(40, 42, 14, 48), white, 0, 7, 40);                       // hall
+  add(new THREE.CylinderGeometry(42.3, 42.3, 1.5, 48, 1, true), warm, 0, 9, 40);          // its window band
+  add(new THREE.SphereGeometry(38, 48, 16, 0, 2 * Math.PI, 0, Math.PI / 2), white, 0, 14, 40);   // dome
+  add(new THREE.CylinderGeometry(3, 4, 34, 16), grey, 0, 48, 30).rotation.x = -0.6;       // telescope, tipped toward the ring
+  add(new THREE.CylinderGeometry(80, 80, 0.2, 48, 1, false, ...FRONT), pale, 0, 0.1, 0);  // terrace floor
+  add(new THREE.CylinderGeometry(80, 80, 1.2, 48, 1, true, ...FRONT), glass, 0, 0.7, 0);  // glass rail
+  add(new THREE.CylinderGeometry(80, 80, 0.12, 48, 1, true, ...FRONT), cool, 0, 1.36, 0); // its lit top edge
+  for (let i = 0; i < 7; i++) {   // benches on an arc, facing out
+    const t = Math.PI / 2 + (i + 0.5) / 7 * Math.PI, b = add(new THREE.BoxGeometry(7, 0.5, 1.6), white, 60 * Math.sin(t), 0.6, 60 * Math.cos(t));
+    b.rotation.y = t;
+  }
+  add(new THREE.CylinderGeometry(28, 28, 0.3, 48), pale, 120, 0.15, 30);                  // landing pad
+  for (let i = 0; i < 16; i++) add(new THREE.BoxGeometry(1, 0.4, 1), cool, 120 + 26 * Math.cos(i / 8 * Math.PI), 0.3, 30 + 26 * Math.sin(i / 8 * Math.PI));
+  add(new THREE.CylinderGeometry(0.6, 0.8, 40, 8), grey, -60, 20, 90);                    // beacon mast
+  OBS.beacon = add(new THREE.SphereGeometry(1.5, 12, 8), new THREE.MeshBasicMaterial({ color: 0xff3030 }), -60, 41, 90);
+  const f = new THREE.Vector3(R * Math.cos(0.3), 0, R * Math.sin(0.3)).sub(MOON.c).projectOnPlane(OBS.d).normalize();
+  obs.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(f.clone().cross(OBS.d), OBS.d, f.negate()));
+  obs.visible = false;
+  scene.add(obs);
 }
 // Moon surface frame at unit direction d: east and north along the surface, like the ring's (east × north = up).
 function moonFrame(d, e, n) {
@@ -2457,6 +2521,32 @@ for (const L of [...MEGAS, ...PEAKS]) {
   document.body.append(L.label);
 }
 const markV = new THREE.Vector3();
+// --- Solid hulls: GSV hulls and spaceports stop the ship. Each frame's step is a ray against their meshes,
+// tested only near them (r is a generous bounding radius). Additive glows aren't solid. Instanced meshes
+// (berthed ships) push back against the flight direction.
+const SOLID_GAP = 6, solidRay = new THREE.Raycaster(), solidO = new THREE.Vector3(), solidHit = { p: new THREE.Vector3(), n: new THREE.Vector3() };
+const SOLIDS = [...GSVS.map(g => ({ grp: g.hull, pos: g.pos, r: Math.hypot(g.L, g.W) / 2 + 1e4 })), ...PORTS.map(P => ({ grp: P.grp, pos: P.pos, r: 2e5 }))];
+for (const S of SOLIDS) {
+  S.meshes = [];
+  S.grp.traverse(o => { if (o.isMesh && [].concat(o.material)[0].blending !== THREE.AdditiveBlending) S.meshes.push(o); });
+}
+function hitSolids(from, dir, len) {
+  for (const S of SOLIDS) {
+    if (from.distanceTo(S.pos) > S.r + len) continue;
+    S.grp.position.copy(S.pos).sub(camPos);
+    S.grp.updateMatrixWorld(true);
+    solidRay.set(solidO.copy(from).sub(camPos), dir);
+    solidRay.far = len;
+    const h = solidRay.intersectObjects(S.meshes, false)[0];
+    if (!h) continue;
+    solidHit.p.copy(h.point).add(camPos);
+    if (h.face && h.instanceId === undefined) solidHit.n.copy(h.face.normal).transformDirection(h.object.matrixWorld);
+    else solidHit.n.copy(dir).negate();
+    if (solidHit.n.dot(dir) > 0) solidHit.n.negate();   // double-sided faces
+    return solidHit;
+  }
+  return null;
+}
 function updatePorts() {
   for (const c of MEGAS) {
     c.grp.position.copy(c.pos).sub(camPos);
@@ -2585,6 +2675,9 @@ landing.onsubmit = e => {
 };
 const Y = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), pUp = new THREE.Vector3();
 let epoch = null, seekPeer = false;
+// The landing card shows a spinner until the relay has answered (or failed) and the scene has drawn a few
+// frames, so the name field doesn't show blank and then fill in, or the first shader compiles stall it.
+let relayReady = !location.host, loadFrames = 0;
 // Esc menu: the browser frees the mouse on Esc, so the menu opens whenever pointer lock ends, unless chat
 // or the landing card took the mouse. Resume (or a click on the backdrop) locks it again.
 const menu = document.getElementById('menu'), menuName = document.getElementById('menuName'), menuMsg = document.getElementById('menuMsg');
@@ -2645,12 +2738,81 @@ function whereIs(p) {
 }
 setInterval(updateNet, 1000);
 
+// --- Altitude tape: a strip on the right like an aircraft altimeter. Altitude is above sea level, or above the
+// moon's surface near the moon. Ticks scroll past a fixed pointer box. The labelled step is 1, 2 or 5 x 10^n,
+// picked to fit the height and changed only when the height leaves 1.5-8 steps, so it doesn't flip back and
+// forth. The ground (or deck) under you is a hatched band.
+const tapeEl = document.getElementById('tape'), tapeG = tapeEl.getContext('2d'), TAPE_W = 56, TAPE_H = 240, TAPE_PX = 40;
+let tapeStep = 10;
+const niceStep = v => { const e = 10 ** Math.floor(Math.log10(v)), m = v / e; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * e; };
+function updateTape() {
+  const p = mode === 'walk' ? camPos : shipPos, md = p.distanceTo(MOON.c);
+  const alt = md < 2 * MOON.r ? md - MOON.r - moonH(moonV.copy(p).sub(MOON.c).divideScalar(md)) : R - Math.hypot(p.x, p.z);
+  const ground = alt - (mode === 'walk' ? EYE + player.z : shipAlt);   // -Infinity when there's nothing under the ship
+  const dpr = devicePixelRatio, g = tapeG, a = Math.max(Math.abs(alt), 20);
+  if (tapeEl.width !== TAPE_W * dpr) { tapeEl.width = TAPE_W * dpr; tapeEl.height = TAPE_H * dpr; }
+  if (a / tapeStep > 8 || a / tapeStep < 1.5) tapeStep = niceStep(a / 3);
+  const s = tapeStep, k = TAPE_PX / s, cy = TAPE_H / 2, km = s >= 1000, CYAN = '#4fe3ff', X0 = 4;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, TAPE_W, TAPE_H);
+  g.shadowColor = 'rgba(0,10,20,0.9)'; g.shadowBlur = 3;   // a dark halo keeps it readable over snow and sky
+  const yg = cy + (alt - ground) * k;
+  if (yg < TAPE_H) {   // ground: a fine amber hatch from the ground line down
+    g.save(); g.beginPath(); g.rect(X0, Math.max(yg, 0), 10, TAPE_H); g.clip();
+    g.strokeStyle = 'rgba(255,190,110,0.6)'; g.lineWidth = 0.75; g.beginPath();
+    for (let y = Math.max(yg, 0) - 10; y < TAPE_H; y += 4) { g.moveTo(X0, y + 10); g.lineTo(X0 + 10, y); }
+    g.stroke(); g.restore();
+    g.strokeStyle = '#ffbe6e'; g.lineWidth = 1; g.beginPath(); g.moveTo(X0, yg); g.lineTo(X0 + 14, yg); g.stroke();
+  }
+  // Spine and ticks, fading toward the ends.
+  const fade = y => Math.max(0, 1 - Math.abs(y - cy) / cy) ** 0.7;
+  g.lineWidth = 1; g.font = '9px ui-monospace, Menlo, monospace'; g.textBaseline = 'middle'; g.textAlign = 'left';
+  const minor = s / 5;
+  for (let i = Math.ceil((alt - cy / k) / minor); i * minor <= alt + cy / k; i++) {
+    const y = cy - (i * minor - alt) * k, major = i % 5 === 0;
+    g.globalAlpha = fade(y);
+    g.strokeStyle = g.fillStyle = CYAN;
+    g.beginPath(); g.moveTo(X0, y); g.lineTo(X0 + (major ? 8 : 4), y); g.stroke();
+    if (major && Math.abs(y - cy) > 10) g.fillText((km ? i * minor / 1000 : i * minor).toLocaleString(), X0 + 12, y);
+  }
+  const spine = g.createLinearGradient(0, 0, 0, TAPE_H);
+  spine.addColorStop(0, 'rgba(79,227,255,0)'); spine.addColorStop(0.5, 'rgba(79,227,255,0.9)'); spine.addColorStop(1, 'rgba(79,227,255,0)');
+  g.globalAlpha = 1; g.strokeStyle = spine; g.beginPath(); g.moveTo(X0, 0); g.lineTo(X0, TAPE_H); g.stroke();
+  // Readout: a thin outlined chevron with the exact height, and the unit under it.
+  g.strokeStyle = CYAN; g.fillStyle = 'rgba(0,12,18,0.6)';
+  g.beginPath(); g.moveTo(X0, cy); g.lineTo(X0 + 6, cy - 8); g.lineTo(TAPE_W - 1, cy - 8); g.lineTo(TAPE_W - 1, cy + 8); g.lineTo(X0 + 6, cy + 8); g.closePath();
+  g.fill(); g.stroke();
+  g.fillStyle = '#e8fbff'; g.font = '10px ui-monospace, Menlo, monospace'; g.textAlign = 'center';
+  g.fillText(Math.abs(alt) < 1e4 ? `${Math.round(alt)}` : `${(alt / 1000).toFixed(Math.abs(alt) < 1e5 ? 1 : 0)}k`, (TAPE_W + X0 + 6) / 2, cy + 0.5);
+  g.fillStyle = CYAN; g.font = '8px ui-monospace, Menlo, monospace';
+  g.fillText(`ALT ${km ? 'KM' : 'M'}`, (TAPE_W + X0 + 6) / 2, cy + 16);
+}
+
+// --- Waypoint: with the map open, Tab cycles through the players, super cities, GSVs, spaceports and the
+// observatory, then none. A marker with the distance shows it in the world, and a ring on the map.
+let way = null;   // { name, at(out) -> out or null }
+const wayLabel = document.createElement('div'), wayV = new THREE.Vector3();
+wayLabel.className = 'peer way';
+document.body.append(wayLabel);
+function cycleWay() {
+  const list = [
+    ...[...peers.keys()].map(id => ({ name: peers.get(id).name, at: out => { const sn = peers.get(id)?.snaps.at(-1); return sn ? out.fromArray(sn.w ?? sn.s) : null; } })),
+    ...[...MEGAS, ...GSVS, ...PORTS, OBS].map(t => ({ name: t.name, at: out => out.copy(t.pos) })),
+  ];
+  way = list[(way ? list.findIndex(t => t.name === way.name) : -1) + 1] ?? null;
+}
+function updateWay() {
+  if (way && !way.at(wayV)) way = null;   // that player left
+  if (way) placeLabel(wayLabel, wayV.sub(camPos), way.name);
+  else wayLabel.style.display = 'none';
+}
+
 // --- System map (M) ---
 // A hologram of the system over the live scene, like a chart table on a ship's deck: its own small three.js
 // renderer and scene in ring units (1 = R), drawn as additive glowing lines over a dimmed, scanlined
 // backdrop (CSS), with a 2D canvas on top for the labels. The ring axis is up, so the ring lies flat over a
 // projector disc. The mouse orbits the view (mapYaw, mapTilt = elevation), scroll zooms in on you, and the
-// keys still fly. The sun is a green wireframe core with flickering panels inside a lat-long cage.
+// keys still fly. It covers the whole screen, on black with stars; the player list and chat stay on top.
 const mapEl = document.getElementById('map'), mapLbl = document.getElementById('mapLabels'), mapCtx = mapLbl.getContext('2d');
 const mapGl = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 mapGl.setPixelRatio(Math.min(devicePixelRatio, 1.5));
@@ -2691,27 +2853,17 @@ function mapDay() {
   fc.needsUpdate = true;
 }
 
-// Sun: a wireframe icosahedron core, a shell of triangle panels that switch on and off, and a cage turning
-// the other way.
-const sun = new THREE.Group();
-sun.add(new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(0.045, 1)), new THREE.LineBasicMaterial(glow(SUNG, 0.5))));
-const panelGeo = new THREE.IcosahedronGeometry(0.052, 2);
-panelGeo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(panelGeo.attributes.position.count * 3), 3));
-const panels = new THREE.Mesh(panelGeo, new THREE.MeshBasicMaterial(glow(0xffffff, 0.25, { vertexColors: true, side: THREE.DoubleSide })));
-sun.add(panels, new THREE.LineSegments(new THREE.WireframeGeometry(panelGeo), new THREE.LineBasicMaterial(glow(SUNG, 0.12))));
-const sunCage = lines(latLong(0.075, 8, 12), new THREE.LineBasicMaterial(glow(SUNG, 0.18)));
-sun.scale.setScalar(0.6); sunCage.scale.setScalar(0.6);   // kept small and dim so the ring stays the subject
-const sunG = new THREE.Color(SUNG);
-function flickerPanels(p) {   // each triangle face is lit or dark; a share p of them roll again each call
-  const c = panelGeo.attributes.color;
-  for (let f = 0; f < c.count / 3; f++) {
-    if (Math.random() > p) continue;
-    const k = Math.random() < 0.35 ? 0.4 + 0.6 * Math.random() : 0;
-    for (let v = 0; v < 3; v++) c.setXYZ(f * 3 + v, sunG.r * k, sunG.g * k, sunG.b * k);
-  }
-  c.needsUpdate = true;
+// Sun: a green wire icosahedron, turning slowly.
+const sun = new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(0.03, 1)), new THREE.LineBasicMaterial(glow(SUNG, 0.6)));
+
+// Starfield: points on a sphere far outside the system, brightness varied by vertex colour.
+const starPos = [], starCol = [];
+for (let i = 0; i < 3000; i++) {
+  const v = new THREE.Vector3().randomDirection().multiplyScalar(20), k = 0.2 + 0.8 * Math.random() ** 3;
+  starPos.push(v.x, v.y, v.z); starCol.push(k, k, k);
 }
-flickerPanels(1);
+const mapStars = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3)).setAttribute('color', new THREE.Float32BufferAttribute(starCol, 3)),
+  new THREE.PointsMaterial({ size: 1.5, sizeAttenuation: false, vertexColors: true }));
 
 // Moon, projector disc, landmarks and players.
 const mapMoon = lines(latLong(MOON.r / R, 6, 10, 24), new THREE.LineBasicMaterial(glow(0xcfe8ff, 0.6)));
@@ -2728,19 +2880,18 @@ const PLAYER_MAX = 16, playerPts = new THREE.Points(new THREE.BufferGeometry()
   .setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(PLAYER_MAX * 3), 3)),
   new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, vertexColors: true, transparent: true, depthTest: false }));
 const heading = lines([0, 0, 0, 0, 0, 0], new THREE.LineBasicMaterial(glow(0xffffff, 0.9, { depthTest: false })));
-mapScene.add(ringLines, floorFill, sun, sunCage, mapMoon, disc, ptsOf([...GSVS, ...PORTS].map(s => s.pos), HOLO, 4),
+mapScene.add(mapStars, ringLines, floorFill, sun, mapMoon, disc, ptsOf([...GSVS, ...PORTS, OBS].map(s => s.pos), HOLO, 4),
   ptsOf(MEGAS.map(mega), 0xffcf6b, 7), ptsOf(PEAKS.map(peakV), 0xffffff, 4), playerPts, heading);
 
 // Labels on the 2D canvas, projected with the hologram camera.
 const mapV = new THREE.Vector3(), mapW = new THREE.Vector3(), mapTarget = new THREE.Vector3();
-let mapDayT = 0, mapFlickT = 0;
+let mapDayT = 0;
 function drawMap(dt) {
   const W = innerWidth, H = innerHeight, dpr = devicePixelRatio, me = mode === 'walk' ? camPos : shipPos;
   if (mapLbl.width !== Math.round(W * dpr)) { mapLbl.width = Math.round(W * dpr); mapLbl.height = Math.round(H * dpr); mapGl.setSize(W, H); }
   if (mapLbl.height !== Math.round(H * dpr)) { mapLbl.height = Math.round(H * dpr); mapGl.setSize(W, H); }
   if ((mapDayT -= dt) < 0) { mapDayT = 1; mapDay(); }
-  if ((mapFlickT -= dt) < 0) { mapFlickT = 0.12; flickerPanels(0.12); }
-  sun.rotation.y += dt * 0.3; sunCage.rotation.y -= dt * 0.15;
+  sun.rotation.y += dt * 0.3;
 
   // Camera orbits a target that slides from the axis to you as you zoom in.
   const dist = 3.4 / mapZoom;
@@ -2779,25 +2930,37 @@ function drawMap(dt) {
     g.fillText(text, (mapV.x + 1) / 2 * W, (1 - mapV.y) / 2 * H - 7);
   };
   for (let k = 1; k <= 12; k++) label(mapW.set(...rp(k / 12 * 2 * Math.PI, 0, -0.1)), k, '#4fe3ff', 12);
-  label(mapW.set(0, 0.055, 0), 'sun', '#39ff88');
-  label(mapMoon.position, 'moon', '#cfe8ff');
-  for (const c of MEGAS) label(mega(c).divideScalar(R), c.name.toUpperCase(), '#ffcf6b', 12);
-  if (mapZoom >= 4) for (const s of [...GSVS, ...PORTS]) label(mapW.copy(s.pos).divideScalar(R), s.name, '#4fe3ff', 10);
+  if (mapZoom >= 4) for (const s of [...GSVS, ...PORTS, OBS]) label(mapW.copy(s.pos).divideScalar(R), s.name, '#4fe3ff', 10);
   for (const [v, text, color] of tags) label(v, text, color, 12);
+  if (way && way.at(mapW)) {
+    const d = mapW.distanceTo(me);
+    mapW.divideScalar(R).project(mapCam);
+    if (mapW.z < 1) {
+      const x = (mapW.x + 1) / 2 * W, y = (1 - mapW.y) / 2 * H;
+      g.strokeStyle = g.fillStyle = g.shadowColor = '#7fffd4'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(x, y, 10, 0, 7); g.stroke();
+      g.font = '12px ui-monospace, Menlo, monospace'; g.textBaseline = 'top';
+      g.fillText(`${way.name} · ${fmtDist(d)}`, x, y + 14);
+    }
+  }
+  g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = g.shadowColor = '#4fe3ff'; g.textBaseline = 'bottom';
+  g.fillText(`mouse spins · scroll zooms · Tab waypoint: ${way?.name ?? 'none'} · M closes`, W / 2, H - 16);
 }
 ws.onopen = updateNet;
-ws.onclose = () => { joinName.hidden = true; joinMsg.textContent = ''; updateNet(); };
+ws.onclose = () => { relayReady = true; joinName.hidden = true; joinMsg.textContent = ''; updateNet(); };
 ws.onmessage = e => {
   const m = JSON.parse(e.data);
   if (m.type === 'hello') {
     epoch = m.epoch;
     roomNo = m.room;
     dayUniforms.uDayAngle.value = DAY_RATE * (Date.now() - epoch) / 1000 % (2 * Math.PI);
+    relayReady = true;
     seekPeer = m.others > 0;  // someone is already here: spawn next to them once their pose arrives
     if (!seekPeer) spawn();
     updateNet();
   } else if (m.type === 'full') {
     full = true;
+    relayReady = true;
   } else if (m.type === 'name-ok') {
     if (myName && m.name !== myName) addChat(null, `you are now ${m.name}`);
     myName = m.name;   // server-cleaned, so safe to put in innerHTML
@@ -2964,11 +3127,17 @@ renderer.setAnimationLoop(() => {
   updateTiles();
   updateGsv();
   updatePorts();
+  updateWay();
   updateMoon();
   updateTowns();
   updateShrubs();
   updateBuildings();
   if (mapOpen) drawMap(dt);
+  else updateTape();
+  if (relayReady && landing.classList.contains('loading') && ++loadFrames > 3) {
+    landing.classList.remove('loading');
+    if (!joinName.hidden) joinName.focus();
+  }
 
   frames++;
   const now = performance.now();
@@ -2995,11 +3164,8 @@ renderer.setAnimationLoop(() => {
     }
     const qLabel = Object.keys(QUALITY).find(k => QUALITY[k] === Q);
     fpsEl.textContent = `${Math.round(fps)} fps · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris · res ${res.toFixed(2)}× · ${qLabel}${autoPickAt < Infinity ? ' (testing)' : ''}`;
-    const p = mode === 'walk' ? camPos : shipPos, md = p.distanceTo(MOON.c);
-    const alt = md < 2 * MOON.r ? md - MOON.r - moonH(moonV.copy(p).sub(MOON.c).divideScalar(md)) : R - Math.hypot(p.x, p.z);
-    const altText = alt < 1e4 ? alt.toFixed(0) + ' m' : (alt / 1000).toFixed(0) + ' km';
     const capped = keys.has('KeyW') && speedCap() < SHIP_MAX && shipSpeed > 0.97 * speedCap();   // throttling into the height limit
-    flightEl.innerHTML = (mode === 'ship' ? `<b>${fmtSpeed(shipSpeed)}</b>${capped ? ' <span>· climb to go faster</span>' : ''}<br>` : '') + `<span>altitude</span> ${altText}`;
+    flightEl.innerHTML = mode === 'ship' ? `<b>${fmtSpeed(shipSpeed)}</b>${capped ? ' <span>· climb to go faster</span>' : ''}` : '';
     statsEl.innerHTML = `${tileCount} tiles${deckCount ? ` + ${deckCount} deck` : ''}, deepest level ${deepest}<br>` +
       `finest spacing ${(TILE0 / 2 ** deepest / GRID).toFixed(3)} m<br>${shrubMesh.count} shrubs, ${bMeshes.terrace.count + bMeshes.tower.count + bMeshes.dome.count} buildings, ${bMeshes.tree.count} trees, ${nearTowns.length} settlements near`;
     frames = 0; fpsT = now;

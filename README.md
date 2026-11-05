@@ -63,18 +63,18 @@ Click the scene to capture the mouse. Press Esc to release it.
 |---|---|
 | V | In the ship: land and step out. On foot: get in and lift off |
 | O | Overview of the whole ring |
-| L | Turn the ship's headlight on or off |
+| L | Turn the ship's headlight on or off. It starts off in daylight. |
 | M | Open or close the system map |
 | Enter | Open the chat box |
 | N | Cycle the HUD: everything, player labels only, then nothing but chat |
 
-The system map is a hologram of the ring, the sun, the moon, the GSVs, the spaceports, the super cities, the peaks and every player in your room, with their speed. It shows the day and night sides of the ring. It draws over the game, and the game keeps going. While the map is open, the mouse turns the map and scroll zooms in on you. The keys still fly the ship, and the ship keeps its heading. Clock numbers around the ring match the player list.
+The system map is a hologram of the ring, the sun, the moon, the GSVs, the spaceports, the super cities, the peaks and every player in your room, with their speed. It shows the day and night sides of the ring. It fills the screen, on black with stars; the player list and chat stay on top, and the game keeps going under it. While the map is open, the mouse turns the map and scroll zooms in on you. Tab sets a waypoint: it cycles through the players, the super cities, the GSVs, the spaceports and the observatory, then none. The waypoint shows as a ring on the map and as a green marker with the distance in the game. The keys still fly the ship, and the ship keeps its heading. Clock numbers around the ring match the player list.
 
 When you press V in the ship, it flies itself down to the ground a little ahead, levels out, puts its legs down and lands. Then you step out beside it. When you press V on foot near the landed ship, you get in and it lifts off. Farther away, the ship comes down beside you first.
 
-If the ship hits the ground or a GSV deck slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site. The chat of your room shows that you crashed.
+If the ship hits the ground, a GSV deck, a GSV hull or a spaceport slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site. The chat of your room shows that you crashed.
 
-The top-right box shows the speed and the altitude. Esc frees the mouse and opens the menu. Esc again closes it. The menu has Resume, a name field to rename (the room sees the change, at most once every 10 seconds), the ship colours, and these settings:
+The top-right box shows the speed. The tape on the right edge is an altimeter: the box shows the height above sea level (or the moon's surface), the ticks scroll past it, and a brown hatched band marks the ground or deck under you. Esc frees the mouse and opens the menu. Esc again closes it. The menu has Resume, a name field to rename (the room sees the change, at most once every 10 seconds), the ship colours, and these settings:
 
 - **Sound** turns sound on or off. Sound starts after your first click.
 
@@ -87,7 +87,7 @@ You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
 The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 400 km east of the first GSV), two super cities with skylines of towers up to 1.5 km, and seven straits where the land strip gives way to sea and islands. A ◆ marker with the distance shows each peak within 2,000 km. The super cities, Ossuen and Telmarra, have a marker with their name that shows from anywhere.
 
-A moon, 300 km in radius, hangs about 6,000 km past one wall, Fly there; above the ring the speed limit lifts. It has day and night with the shade, so it shows phases from the ring. You can land on it and walk (V), where the gravity is 1.62 m/s², so jumps go about six times higher.
+A moon, 300 km in radius, hangs about 6,000 km past one wall, Fly there; above the ring the speed limit lifts. It has day and night with the shade, so it shows phases from the ring. You can land on it and walk (V), where the gravity is 1.62 m/s², so jumps go about six times higher. An observatory stands on the side away from the near arc of the ring: a domed hall, a terrace with benches that face the ring, and a landing pad. Set it as the waypoint on the map to find it.
 
 ## Notes for an agent
 
@@ -102,5 +102,6 @@ A moon, 300 km in radius, hangs about 6,000 km past one wall, Fly there; above t
 - Server messages: `hello {id, epoch, room, others}`, `full`, `name-ok {name}`, `name-bad {reason}`, `rename {id, old, name}`, `pose {id, name, s, w, c}`, `chat {id, name, text}`, `crash {id, name}` and `leave {id}`. Client messages: `name {name}`, `pose {s, w, c}`, `chat {text}` and `crash`. `c` is the ship colour, an index into `SHIP_COLORS` (0 to 7). The relay sends nothing from a client until that client has a name. `s` is the ship position and quaternion (7 numbers). `w` is the eye position of a walker, or `null`.
 - The relay sends `epoch` 0. All clients calculate the day angle from the clock, so all players see the same time of day. The client wraps the angle to one turn, because the shader uniform is a 32-bit float.
 - Do not set `run_worker_first` in `wrangler.toml`. With it, each page load counts as a billed request.
-- The moon is `MOON` (centre, radius, gravity). `moonH()` gives its height for the meshes, ship collision and walking. A coarse whole-moon mesh is built once; a 20 km detail patch rebuilds under the camera within 60 km of the surface, and the coarse mesh sinks 3 km under it. On the moon, `player.moon` is the walker's unit direction from the centre.
+- GSV hulls and spaceports are solid for the ship only: `hitSolids()` casts each frame's step against their meshes when the ship is near one.
+- The moon is `MOON` (centre, radius, gravity). `moonH()` gives its height, flattened around the observatory site `OBS`, for the meshes, ship collision and walking. A coarse whole-moon mesh is built once; a 20 km detail patch rebuilds under the camera within 60 km of the surface, and the coarse mesh sinks 3 km under it. On the moon, `player.moon` is the walker's unit direction from the centre.
 - To test in headless Chrome, use `--use-angle=swiftshader --enable-unsafe-swiftshader`. Use `--timeout=15000` for screenshots. `--virtual-time-budget` renders about one frame, so the scene does not move.
