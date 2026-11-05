@@ -599,6 +599,13 @@ function patchTiles(shader) {
     #ifndef WATER
       if (vSkirt > 0.0) normal = normalize(vUpV);   // lit like flat ground, not like a wall
     #endif`).replace('#include <opaque_fragment>', '#ifndef WATER\noutgoingLight += cityGlow * (1.0 - vDay);\n#endif\n#include <opaque_fragment>');
+  // MSAA: a pixel on a tile's edge also takes samples from the skirt hanging below it, shaded at the pixel
+  // centre, which can lie far outside that thin triangle. Its varyings, and the log depth written from
+  // vFragDepth, were extrapolated wildly and drew dashed lines along tile edges. Centroid sampling keeps
+  // them inside the triangle. (Not vViewPosition: flat shading takes its derivatives.)
+  const centroid = src => src.replace(/(?<!flat )\bvarying (?!vec3 vViewPosition)/g, 'centroid varying ');
+  shader.vertexShader = centroid(shader.vertexShader.replace('#include <logdepthbuf_pars_vertex>', THREE.ShaderChunk.logdepthbuf_pars_vertex));
+  shader.fragmentShader = centroid(shader.fragmentShader.replace('#include <logdepthbuf_pars_fragment>', THREE.ShaderChunk.logdepthbuf_pars_fragment));
 }
 const terrainMat = new THREE.MeshStandardMaterial({ roughness: 0.9, side: THREE.DoubleSide, flatShading: true });
 terrainMat.onBeforeCompile = patchTiles;
