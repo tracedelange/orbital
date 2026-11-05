@@ -364,12 +364,16 @@ float terrainHeight(uvec3 idx, vec2 st, float th, float u, out float n, out floa
   int oct = int(idx.z) + 2;
   float t = abs(u) / ${f1(HW)};
   float le = landEdge(th);
-  float land = 1.0 - smoothstep(le - 0.09, le + 0.09, t);
-  ${STRAITS.map(st => `land *= smoothstep(${f1(st.w)}, ${f1(2 * st.w)}, abs(arcD(th, ${(st.a / R).toFixed(6)})));`).join('\n  ')}
   n = tFbm(idx, st, 0, oct, 0u);
+  // The coast wanders with the terrain noise (about ±70 km at the largest scale), so the strip's sides
+  // aren't smooth curves from altitude.
+  float land = 1.0 - smoothstep(le - 0.09, le + 0.09, t + 0.06 * n);
   float m = tFbm(idx, st, 0, min(oct, 12), 100u);
   river = abs(tFbm(idx, st, 0, min(oct, 6), 200u));
   lake = tFbm(idx, st, 0, min(oct, 5), 300u);
+  // Straits: the coast is skewed across the strip by a slow sine and made ragged by the terrain noise,
+  // so it never reads as a straight cut. landStrait() in JS is the twin.
+  ${STRAITS.map((st, i) => `land *= smoothstep(${f1(st.w)}, ${f1(2 * st.w)}, abs(arcD(th, ${(st.a / R).toFixed(6)}) + ${f1(st.w)} * sin(u / 1.5e5 + ${i}.0)) + ${f1(1.5 * st.w)} * n);`).join('\n  ')}
   // Landmarks: mk rises to 1 at the nearest peak's summit (mh is that peak's height), ck is 1 on a super
   // city's flattened ground. Both keep rivers and lakes off them.
   float mk = 0.0, mh = 0.0, ck = 0.0;
@@ -424,9 +428,9 @@ const bowlH = u => WALL * (Math.max(Math.abs(u) / HW - BOWL_T, 0) / (1 - BOWL_T)
 // Returns [height, wet]; wet is true on rivers and lakes.
 function terrainAt(a, u) {
   const oct = MAX_LEVEL + 2, t = Math.abs(u) / HW, le = landEdge(a / R);
-  let land = 1 - smoothstep(t, le - 0.09, le + 0.09);
-  for (const st of STRAITS) land *= smoothstep(Math.abs(arcDelta(a, st.a)), st.w, 2 * st.w);
   const n = tFbm(a, u, oct, 0), m = tFbm(a, u, Math.min(oct, 12), 100);
+  let land = 1 - smoothstep(t + 0.06 * n, le - 0.09, le + 0.09);
+  STRAITS.forEach((st, i) => { land *= smoothstep(Math.abs(arcDelta(a, st.a) + st.w * Math.sin(u / 1.5e5 + i)) + 1.5 * st.w * n, st.w, 2 * st.w); });
   let mk = 0, mh = 0;
   for (const pk of PEAKS) { const k = clamp(1 - Math.hypot(arcDelta(a, pk.a), u - pk.u) / pk.r, 0, 1); if (k > mk) { mk = k; mh = pk.h; } }
   let ck = 0;
