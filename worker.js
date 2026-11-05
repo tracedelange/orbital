@@ -79,7 +79,10 @@ export class Relay extends DurableObject {
     } else if (!me.name) {
       // nothing goes out until the player has a name
     } else if (m.type === 'pose' && nums(m.s, 7) && (m.w === null || nums(m.w, 3))) {
-      this.toRoom(ws, me.room, { type: 'pose', id: me.id, name: me.name, s: m.s, w: m.w });
+      const c = Number.isInteger(m.c) && m.c >= 0 && m.c < 8 ? m.c : 0;   // ship colour index
+      this.toRoom(ws, me.room, { type: 'pose', id: me.id, name: me.name, s: m.s, w: m.w, c });
+    } else if (m.type === 'crash') {
+      this.toRoom(ws, me.room, { type: 'crash', id: me.id, name: me.name });
     } else if (m.type === 'chat' && now - me.chatAt > 1000) {
       const text = String(m.text ?? '').trim().slice(0, 200);
       if (text) {

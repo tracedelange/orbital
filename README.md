@@ -22,7 +22,7 @@ The page runs alone when it cannot reach the relay.
 
 The game runs at https://orbital.tdelange.com.
 
-A title card opens over the running scene. When the page opens from a server, the card asks for the name that other players see. The relay accepts 2 to 20 letters, numbers, spaces, dots, dashes or underscores, and rejects rude names. The page keeps the last name for the next visit. `?name=Alice` in the link fills in the form.
+A title card opens over the running scene. When the page opens from a server, the card asks for the name that other players see. The relay accepts 2 to 20 letters, numbers, spaces, dots, dashes or underscores, and rejects rude names. The card also has ship colour swatches, which other players see. The page keeps the last name and colour for the next visit. `?name=Alice` in the link fills in the form.
 
 The relay puts players in rooms of 8. A player joins the first room with space. When all rooms are full, the relay opens a new one, up to 20 rooms. After that, new players fly solo. The top-left box shows your room and how many other players are in it.
 
@@ -57,7 +57,7 @@ Click the scene to capture the mouse. Press Esc to release it.
 | W / S | Throttle up / down | Walk forward / back |
 | A / D | Roll | Walk left / right |
 | Scroll | Throttle | Walk speed |
-| Space | | Jump |
+| Space | Hold to look around | Jump |
 
 | Key | Both modes |
 |---|---|
@@ -68,16 +68,16 @@ Click the scene to capture the mouse. Press Esc to release it.
 | P | Stop or start the day cycle on your screen |
 | M | Turn sound on or off. Sound starts after your first click. |
 | Enter | Open the chat box |
-| N | Show or hide the labels |
+| N | Cycle the HUD: everything, player labels only, then nothing but chat |
 
-If the ship hits the ground or a GSV deck slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site.
+If the ship hits the ground or a GSV deck slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site. The chat of your room shows that you crashed.
 
 The top-right box shows the speed, the top speed at this height, and the altitude. The ⚙ button opens the settings:
 
 - **Quality** is Auto, Low, Medium or High. Auto plays the first 10 seconds on Medium, then picks a preset from the frame rate. The page keeps the choice for the next visit.
 - **LOD detail** sets how much terrain detail the page draws. A lower value is faster. Each preset sets it.
 
-The page changes its render resolution to hold about 50 fps. Medium and High never go below 1×. Low goes down to 0.6×, which looks grainy but is faster. Low also turns off antialiasing from the next page load, draws fewer shrubs and buildings, and lowers the top speed near the ground.
+The page changes its render resolution to hold about 50 fps. Medium and High never go below 1×. When the frame rate drops, the page first lowers the terrain detail by up to half a step, then the resolution. Low goes down to 0.75×, which looks grainy but is faster. Low also turns off antialiasing from the next page load, draws fewer shrubs and buildings, and lowers the top speed near the ground.
 
 You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
@@ -95,7 +95,7 @@ A moon, 300 km in radius, hangs about 6,000 km past one wall, and its ◆ marker
 - The GSV deck draws a patch of the ring terrain flat, with the `DECK` shader define. `deckH()` is its JS twin.
 - The relay has no game logic. One Durable Object, `Relay`, holds every socket. It tags each socket with its room (`ROOM_MAX` 8, `MAX_ROOMS` 20). It checks names, builds each pose again from the known fields, masks chat with the `obscenity` package, and drops messages over the rate limit (30 a second, 1 chat a second, 1 KB maximum). Then it sends each message to the other sockets in the same room.
 - The relay uses WebSocket hibernation. Memory can be erased between messages, so all state for each socket is in its attachment.
-- Server messages: `hello {id, epoch, room, others}`, `full`, `name-ok {name}`, `name-bad {reason}`, `pose {id, name, s, w}`, `chat {id, name, text}` and `leave {id}`. Client messages: `name {name}`, `pose {s, w}` and `chat {text}`. The relay sends nothing from a client until that client has a name. `s` is the ship position and quaternion (7 numbers). `w` is the eye position of a walker, or `null`.
+- Server messages: `hello {id, epoch, room, others}`, `full`, `name-ok {name}`, `name-bad {reason}`, `pose {id, name, s, w, c}`, `chat {id, name, text}`, `crash {id, name}` and `leave {id}`. Client messages: `name {name}`, `pose {s, w, c}`, `chat {text}` and `crash`. `c` is the ship colour, an index into `SHIP_COLORS` (0 to 7). The relay sends nothing from a client until that client has a name. `s` is the ship position and quaternion (7 numbers). `w` is the eye position of a walker, or `null`.
 - The relay sends `epoch` 0. All clients calculate the day angle from the clock, so all players see the same time of day. The client wraps the angle to one turn, because the shader uniform is a 32-bit float.
 - Do not set `run_worker_first` in `wrangler.toml`. With it, each page load counts as a billed request.
 - The moon is `MOON` (centre, radius, gravity). `moonH()` gives its height for the meshes, ship collision and walking. A coarse whole-moon mesh is built once; a 20 km detail patch rebuilds under the camera within 60 km of the surface, and the coarse mesh sinks 3 km under it. On the moon, `player.moon` is the walker's unit direction from the centre.
