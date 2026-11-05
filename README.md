@@ -74,7 +74,7 @@ When you press V in the ship, it flies itself down to the ground a little ahead,
 
 If the ship hits the ground, a GSV deck, a GSV hull or a spaceport slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site. The chat of your room shows that you crashed.
 
-The top-right box shows the speed. The tape on the right edge is an altimeter: the box shows the height above sea level (or the moon's surface), the ticks scroll past it, and a brown hatched band marks the ground or deck under you. Esc frees the mouse and opens the menu. Esc again closes it. The menu has Resume, a name field to rename (the room sees the change, at most once every 10 seconds), the ship colours, and these settings:
+The top-right box shows the speed. The tape on the right edge is an altimeter: the box shows the height above sea level (or the moon's surface), the ticks scroll past it, and a brown hatched band marks the ground or deck under you. Esc frees the mouse and opens the menu. Esc again closes it. With the map open, Esc closes the map instead; click the scene to take the mouse back. The menu has Resume, a name field to rename (the room sees the change, at most once every 10 seconds), the ship colours, and these settings:
 
 - **Sound** turns sound on or off. Sound starts after your first click.
 
@@ -87,7 +87,7 @@ You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
 The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 400 km east of the first GSV), two super cities with skylines of towers up to 1.5 km, and seven straits where the land strip gives way to sea and islands. A ◆ marker with the distance shows each peak within 2,000 km. The super cities, Ossuen and Telmarra, have a marker with their name that shows from anywhere.
 
-A moon, 300 km in radius, hangs about 6,000 km past one wall, Fly there; above the ring the speed limit lifts. It has day and night with the shade, so it shows phases from the ring. You can land on it and walk (V), where the gravity is 1.62 m/s², so jumps go about six times higher. An observatory stands on the side away from the near arc of the ring: a domed hall, a terrace with benches that face the ring, and a landing pad. Set it as the waypoint on the map to find it.
+A moon, 300 km in radius, hangs about 6,500 km past one wall. Fly there; above the ring the speed limit lifts. It has day and night with the shade, so it shows phases from the ring. You can land on it and walk (V), where the gravity is 1.62 m/s², so jumps go about six times higher. An observatory stands on the side away from the near arc of the ring: a domed hall, a terrace with benches that face the ring, and a landing pad. Set it as the waypoint on the map to find it.
 
 ## Notes for an agent
 
@@ -100,6 +100,7 @@ A moon, 300 km in radius, hangs about 6,000 km past one wall, Fly there; above t
 - The relay has no game logic. One Durable Object, `Relay`, holds every socket. It tags each socket with its room (`ROOM_MAX` 8, `MAX_ROOMS` 20). It checks names, builds each pose again from the known fields, masks chat with the `obscenity` package, and drops messages over the rate limit (30 a second, 1 chat a second, 1 KB maximum). Then it sends each message to the other sockets in the same room.
 - The relay uses WebSocket hibernation. Memory can be erased between messages, so all state for each socket is in its attachment.
 - Server messages: `hello {id, epoch, room, others}`, `full`, `name-ok {name}`, `name-bad {reason}`, `rename {id, old, name}`, `pose {id, name, s, w, c}`, `chat {id, name, text}`, `crash {id, name}` and `leave {id}`. Client messages: `name {name}`, `pose {s, w, c}`, `chat {text}` and `crash`. `c` is the ship colour, an index into `SHIP_COLORS` (0 to 7). The relay sends nothing from a client until that client has a name. `s` is the ship position and quaternion (7 numbers). `w` is the eye position of a walker, or `null`.
+- Other players on foot are drawn by `makeWalker()`: a suit in their ship colour that faces the way they move and swings its limbs with their speed, both worked out from the `w` positions.
 - The relay sends `epoch` 0. All clients calculate the day angle from the clock, so all players see the same time of day. The client wraps the angle to one turn, because the shader uniform is a 32-bit float.
 - Do not set `run_worker_first` in `wrangler.toml`. With it, each page load counts as a billed request.
 - GSV hulls and spaceports are solid for the ship only: `hitSolids()` casts each frame's step against their meshes when the ship is near one.

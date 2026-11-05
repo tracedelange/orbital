@@ -245,6 +245,7 @@ uniform vec3 uCamPos;
 const float ATM_H = 8000.0, ATM_BETA = 1.0 / 90000.0;   // optical depth 1 per 90 km of sea-level air
 const vec3 ATM_EXT = vec3(0.55, 0.85, 1.6);             // blue scatters most
 const vec3 ATM_SKY = vec3(0.30, 0.52, 1.0);             // colour of fully lit air
+const vec3 ATM_NIGHT = vec3(0.025, 0.03, 0.05);         // unlit air, faintly lit by ringshine
 void atmosphere(vec3 rel, int n, out vec3 trans, out vec3 inscat) {
   float tau = 0.0, lit = 0.0;
   for (int k = 0; k < 16; k++) {
@@ -260,8 +261,13 @@ void atmosphere(vec3 rel, int n, out vec3 trans, out vec3 inscat) {
   }
   float scale = length(rel) * ATM_BETA / float(n);
   tau *= scale; lit *= scale;
-  trans = exp(-tau * ATM_EXT);
-  inscat = ATM_SKY * (1.0 - trans) * (tau > 0.0 ? lit / tau : 0.0);
+  // Only sunlit air shifts colour (blue scattered out, blue scattered back in). Unlit air would otherwise
+  // filter distant night ground to red-brown with nothing to balance it, so it dims evenly toward ATM_NIGHT.
+  float f = tau > 0.0 ? lit / tau : 0.0;
+  vec3 tSun = exp(-tau * ATM_EXT);
+  float tGrey = exp(-tau * 0.9);
+  trans = mix(vec3(tGrey), tSun, f);
+  inscat = ATM_SKY * (1.0 - tSun) * f + ATM_NIGHT * (1.0 - tGrey) * (1.0 - f);
 }`;
 // mode 'tile': the tile code sets vDay. 'ring': from the ring-frame vertex position. 'local': one value
 // for small things near the camera (ship, shrubs).
@@ -1281,7 +1287,8 @@ const groundUp = new THREE.Vector3();       // up at the surface under the ship,
 // Above the cap, speed bleeds off over about a second.
 const speedCap = () => Math.min(SHIP_MAX, 50 + Q.speedK * shipAlt);
 
-let mode = 'ship', walkSpeed = 5, muted = false, mapOpen = false;
+let mode = 'ship', walkSpeed = 8, muted = false, mapOpen = false;
+const JUMP_V = 5;   // jump launch speed (m/s), kept apart from walk speed so faster walking doesn't mean higher jumps
 const player = { a: 0, u: 0, yaw: 0, pitch: 0, z: 0, vz: 0, gsv: null }; // z: height above ground while jumping; gsv: the GSV whose deck they're on
 const keys = new Set();
 
@@ -1980,7 +1987,7 @@ function updateWalk(dt) {
   }
 
   // Jump launch speed equals walk speed, so scrolling up gives bigger leaps.
-  if (keys.has('Space') && player.z === 0) player.vz = walkSpeed;
+  if (keys.has('Space') && player.z === 0) player.vz = JUMP_V;
   player.vz -= (player.moon ? MOON.g : GRAVITY) * dt;
   player.z = Math.max(0, player.z + player.vz * dt);
   if (player.z === 0) player.vz = Math.max(0, player.vz);
@@ -2023,6 +2030,7 @@ addEventListener('mousemove', e => {
 });
 addEventListener('keydown', e => {
   if (e.code === 'Escape' && !menu.hidden) return resume();   // Esc opens the menu (by freeing the mouse) and closes it
+  if (e.code === 'Escape' && mapOpen) return setMap(false);
   if (e.target.tagName === 'INPUT' || !landing.hidden || !menu.hidden) return;   // typing, or a card is open
   if (e.code === 'Enter') return openChat();
   if (e.code === 'Tab') { e.preventDefault(); if (mapOpen) cycleWay(); return; }
@@ -2031,7 +2039,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyO') overview();
   if (e.code === 'KeyN') { hudLevel = hudLevel === 1 ? 3 : hudLevel - 1; document.body.dataset.hud = hudLevel; updateHud(); }
   if (e.code === 'KeyL') { headlight.intensity = headlight.intensity ? 0 : 3; updateHud(); }   // intensity, not visible: no shader rebuild
-  if (e.code === 'KeyM') { mapOpen = !mapOpen; mapEl.hidden = !mapOpen; document.body.classList.toggle('map', mapOpen); updateHud(); }
+  if (e.code === 'KeyM') setMap(!mapOpen);
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('wheel', e => {
@@ -2350,10 +2358,10 @@ for (const c of MEGAS) {
 }
 
 // --- Moon ---
-// A cratered moon 300 km in radius, 0.6 R off the axis and 4,000 km past the +y wall. The false sun lights it,
+// A cratered moon 300 km in radius, 0.6 R off the axis and 6,500 km past the +y wall. The false sun lights it,
 // and it has day and night with the shade at its azimuth, so it shows phases from the ring. No air, no water.
 // moonH() is the one height function: the meshes, ship collision and walking all use it.
-const MOON = { c: new THREE.Vector3(0.6 * R * Math.cos(0.3), HW + 4e6, 0.6 * R * Math.sin(0.3)), r: 3e5, g: 1.62 };
+const MOON = { c: new THREE.Vector3(0.6 * R * Math.cos(0.3), HW + 6.5e6, 0.6 * R * Math.sin(0.3)), r: 3e5, g: 1.62 };
 const MOON_CRATERS = [[6, 3000, 1], [24, 1200, 2], [96, 300, 3], [384, 60, 4]];   // cells per cube-face edge, depth (m), seed
 function vnoise3(x, y, z, seed) {   // value noise in -1..1
   const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
@@ -2385,7 +2393,7 @@ function moonH0(d) {
 }
 // The observatory sits on ground flattened to the height at its centre (out to 1.2 km, blending by 2.5 km).
 // Its site is on the side of the moon away from the near arc of the ring, tilted so that arc stands about
-// 20° over the horizon in front of the deck, with the far arc and the sun high behind.
+// 30° over the horizon in front of the deck, with the far arc and the sun high behind.
 const OBS = { name: 'Observatory', d: new THREE.Vector3(-0.6 * Math.cos(0.3), -1, -0.6 * Math.sin(0.3)).normalize() };
 OBS.h0 = moonH0(OBS.d);
 OBS.pos = MOON.c.clone().addScaledVector(OBS.d, MOON.r + OBS.h0);
@@ -2472,7 +2480,17 @@ function updateMoon() {
   obs.position.copy(OBS.pos).sub(camPos);
   obs.visible = obs.position.length() < 3e5;
   OBS.beacon.visible = performance.now() % 2000 < 300;
+  OBS.pool.opacity = 0.45 * (1 - moonDay.value);
 }
+// Plaque text on the observatory terrace, left to right as you face the ring. Numbers come from R, HW, the
+// land edge (landEdge, about 0.31 of the half width) and MOON; change them if those change.
+const PLAQUES = [
+  { title: 'Iain M. Banks', body: 'Iain Banks (1954-2013) was a Scottish writer, born in Dunfermline. He wrote mainstream novels as Iain Banks, starting with The Wasp Factory in 1984, and science fiction as Iain M. Banks. Ten of those are set in the Culture, from Consider Phlebas (1987) to The Hydrogen Sonata (2012): a post-scarcity society of humans, drones and vast, witty AI Minds.' },
+  { title: 'Orbitals', body: 'Many people of the Culture live not on planets but on Orbitals: rings in space, each run by a Hub Mind. A Culture Orbital is millions of kilometres across and spins once a day, so one turn gives both the gravity that holds you to the floor and the day and night. Look to Windward is set on one, Masaq\' Orbital. The ring above you is a smaller model of the idea.' },
+  { title: 'This Orbital', body: 'Radius 10,000 km. The floor is 2,417 km wide and 62,832 km around: about 152 million square km, near the area of all the land on Earth (149 million) and 30% of its whole surface. The central land strip is about a third of the floor, some 47 million square km, a little more than Asia. The rest is sea and islands, held in by walls 200 km high.' },
+  { title: 'This Moon', body: 'Radius 300 km, about one sixth of our Moon (1,737 km) and 1/200 of its volume. In our solar system it would sit between two moons of Saturn, Enceladus (252 km) and Tethys (531 km). A real body this size would pull at 0.1 to 0.25 metres per second squared. This one is set to our Moon\'s 1.62, so you can walk on it.' },
+  { title: 'Credits', body: 'Developed by Trace DeLange with Claude Code. Source available at github.com/tracedelange/orbital. Hope you\'ve enjoyed!' },
+];
 // --- Observatory: a plaza with a domed hall and telescope, a terrace with a glass rail and benches facing
 // the ring, a landing pad and a beacon. Local frame: +Y up from the moon, -Z toward the near arc. No collision.
 const obs = new THREE.Group();
@@ -2496,6 +2514,41 @@ const obs = new THREE.Group();
     const t = Math.PI / 2 + (i + 0.5) / 7 * Math.PI, b = add(new THREE.BoxGeometry(7, 0.5, 1.6), white, 60 * Math.sin(t), 0.6, 60 * Math.cos(t));
     b.rotation.y = t;
   }
+  // Plaques on posts along the inside of the rail, facing back toward the terrace and leaning back like
+  // lecterns. Text is drawn on a canvas: engraved light text on dark bronze, faintly self-lit for the night.
+  // Floor pools under the plaque lamps: a warm radial glow, faded in at night by updateMoon.
+  const pc = document.createElement('canvas'), pg = pc.getContext('2d');
+  pc.width = pc.height = 64;
+  const grd = pg.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(255,214,160,1)'); grd.addColorStop(1, 'rgba(255,214,160,0)');
+  pg.fillStyle = grd; pg.fillRect(0, 0, 64, 64);
+  const pool = OBS.pool = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(pc), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  PLAQUES.forEach((pq, i) => {
+    const cv = document.createElement('canvas'), c = cv.getContext('2d');
+    cv.width = 512; cv.height = 320;
+    c.fillStyle = '#3b2f24'; c.fillRect(0, 0, 512, 320);
+    c.strokeStyle = '#b08d5e'; c.lineWidth = 6; c.strokeRect(14, 14, 484, 292);
+    c.fillStyle = '#e9d3a8'; c.textAlign = 'center';
+    c.font = '600 30px Georgia, serif'; c.fillText(pq.title, 256, 62);
+    c.font = '18px Georgia, serif';
+    let line = '', y = 104;
+    for (const word of pq.body.split(' ')) {   // wrap to the plaque width
+      if (c.measureText(line + word).width > 450) { c.fillText(line.trim(), 256, y); line = ''; y += 25; }
+      line += word + ' ';
+    }
+    c.fillText(line.trim(), 256, y);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const t = Math.PI / 2 + (i + 0.5) / PLAQUES.length * Math.PI, r = 78.5;
+    // Unlit material: each plaque has its own lamp, so it reads the same by day and night.
+    const plaque = add(new THREE.PlaneGeometry(1.8, 1.125), new THREE.MeshBasicMaterial({ map: tex, color: 0xd8d0c0 }), r * Math.sin(t), 1.25, r * Math.cos(t));
+    plaque.rotation.set(-0.5, t + Math.PI, 0, 'YXZ');   // face the centre, top leaning away from the reader
+    add(new THREE.BoxGeometry(0.1, 0.9, 0.1), grey, (r + 0.25) * Math.sin(t), 0.45, (r + 0.25) * Math.cos(t));   // post
+    add(new THREE.BoxGeometry(1.5, 0.07, 0.18), grey, (r + 0.08) * Math.sin(t), 1.85, (r + 0.08) * Math.cos(t)).rotation.y = t;    // lamp hood
+    add(new THREE.BoxGeometry(1.35, 0.025, 0.06), warm, (r + 0.04) * Math.sin(t), 1.81, (r + 0.04) * Math.cos(t)).rotation.y = t;  // its light
+    add(new THREE.CircleGeometry(2.2, 24), pool, (r - 1.2) * Math.sin(t), 0.25, (r - 1.2) * Math.cos(t)).rotation.x = -Math.PI / 2; // light on the floor
+  });
   add(new THREE.CylinderGeometry(28, 28, 0.3, 48), pale, 120, 0.15, 30);                  // landing pad
   for (let i = 0; i < 16; i++) add(new THREE.BoxGeometry(1, 0.4, 1), cool, 120 + 26 * Math.cos(i / 8 * Math.PI), 0.3, 30 + 26 * Math.sin(i / 8 * Math.PI));
   add(new THREE.CylinderGeometry(0.6, 0.8, 40, 8), grey, -60, 20, 90);                    // beacon mast
@@ -2504,6 +2557,15 @@ const obs = new THREE.Group();
   obs.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(f.clone().cross(OBS.d), OBS.d, f.negate()));
   obs.visible = false;
   scene.add(obs);
+}
+// Testing aid: ?spawn=obs starts you on foot on the observatory terrace, facing the ring.
+const SPAWN_OBS = new URLSearchParams(location.search).get('spawn') === 'obs';
+function toObservatory() {
+  const f = new THREE.Vector3(0, 0, -1).applyQuaternion(obs.quaternion), e = new THREE.Vector3(), n = new THREE.Vector3();
+  toWalk(pv.copy(OBS.pos).addScaledVector(f, 40));
+  moonFrame(OBS.d, e, n);
+  player.yaw = Math.atan2(f.dot(n), f.dot(e));
+  player.pitch = 0.2;
 }
 // Moon surface frame at unit direction d: east and north along the surface, like the ring's (east × north = up).
 function moonFrame(d, e, n) {
@@ -2650,8 +2712,32 @@ function updateTraffic(dt) {
 // Without server.js (e.g. python http.server) the socket just fails and the page runs single-player.
 // Opened as a file there is no host to connect to, so a stand-in that never opens takes the socket's place.
 const peers = new Map();  // id -> { name, snaps: [{ t, s, w }], ship, body, label }
-const walkerGeo = new THREE.CapsuleGeometry(0.3, 1.2, 4, 8);
-const walkerMat = withDay(new THREE.MeshStandardMaterial({ color: 0xff9f43, roughness: 0.6 }), 'local');
+// Walkers: a low-poly explorer in a suit tinted with their ship colour (the peer's own hull material), with a
+// white helmet, glowing visor and a backpack light. Feet at the origin, +Y up, facing -Z. Arms and legs hang
+// from pivots (w.limbs: left arm, right arm, left leg, right leg) that updatePeers swings with walking speed.
+const walkerGrey = withDay(new THREE.MeshStandardMaterial({ color: 0x3a3f48, roughness: 0.7 }), 'local');
+const walkerWhite = withDay(new THREE.MeshStandardMaterial({ color: 0xe8ecf0, roughness: 0.4, metalness: 0.2 }), 'local');
+const walkerGlow = new THREE.MeshBasicMaterial({ color: 0x7fe8ff });
+function makeWalker(suit) {
+  const w = new THREE.Group();
+  const part = (geo, mat, x, y, z, parent = w) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
+  part(new THREE.CapsuleGeometry(0.2, 0.3, 4, 10), suit, 0, 1.18, 0).scale.set(1.15, 1, 0.8);   // torso
+  part(new THREE.BoxGeometry(0.34, 0.16, 0.22), walkerGrey, 0, 0.9, 0);                         // hips
+  part(new THREE.SphereGeometry(0.15, 14, 10), walkerWhite, 0, 1.62, 0);                       // helmet
+  part(new THREE.BoxGeometry(0.22, 0.08, 0.06), walkerGlow, 0, 1.63, -0.12);                   // visor
+  part(new THREE.BoxGeometry(0.28, 0.34, 0.13), walkerGrey, 0, 1.2, 0.18);                      // backpack
+  part(new THREE.BoxGeometry(0.04, 0.24, 0.02), walkerGlow, 0, 1.2, 0.25);                      // its light
+  w.limbs = [[-0.27, 1.42, 0.42, 0.06, suit], [0.27, 1.42, 0.42, 0.06, suit], [-0.1, 0.86, 0.8, 0.08, walkerGrey], [0.1, 0.86, 0.8, 0.08, walkerGrey]]
+    .map(([x, y, len, r, mat], i) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(x, y, 0);
+      w.add(pivot);
+      part(new THREE.CapsuleGeometry(r, len - 2 * r, 4, 8), mat, 0, -len / 2, 0, pivot);
+      if (i >= 2) part(new THREE.BoxGeometry(0.13, 0.08, 0.24), walkerGrey, 0, -len - 0.02, -0.04, pivot);   // boot
+      return pivot;
+    });
+  return w;
+}
 // Landing card: title, name and Fly, over the scene already running behind it. The name field shows only
 // while the relay is reachable (there's no one to meet when opened as a file, offline or with all rooms
 // full), filled from ?name= or the last name used. The relay checks it (length, characters, profanity)
@@ -2683,6 +2769,7 @@ let relayReady = !location.host, loadFrames = 0;
 const menu = document.getElementById('menu'), menuName = document.getElementById('menuName'), menuMsg = document.getElementById('menuMsg');
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
+  if (!locked && mapOpen) return setMap(false);   // with the map open, Esc closes the map instead; a click takes the mouse back
   menu.hidden = locked || !landing.hidden || !chatIn.hidden;
   if (!menu.hidden) {
     keys.clear();   // keys held now would never see their keyup
@@ -2807,6 +2894,12 @@ function updateWay() {
   else wayLabel.style.display = 'none';
 }
 
+function setMap(open) {
+  mapOpen = open;
+  mapEl.hidden = !open;
+  document.body.classList.toggle('map', open);
+  updateHud();
+}
 // --- System map (M) ---
 // A hologram of the system over the live scene, like a chart table on a ship's deck: its own small three.js
 // renderer and scene in ring units (1 = R), drawn as additive glowing lines over a dimmed, scanlined
@@ -2955,8 +3048,9 @@ ws.onmessage = e => {
     roomNo = m.room;
     dayUniforms.uDayAngle.value = DAY_RATE * (Date.now() - epoch) / 1000 % (2 * Math.PI);
     relayReady = true;
-    seekPeer = m.others > 0;  // someone is already here: spawn next to them once their pose arrives
+    seekPeer = m.others > 0 && !SPAWN_OBS;  // someone is already here: spawn next to them once their pose arrives
     if (!seekPeer) spawn();
+    if (SPAWN_OBS) toObservatory();
     updateNet();
   } else if (m.type === 'full') {
     full = true;
@@ -2985,13 +3079,14 @@ ws.onmessage = e => {
   } else if (m.type === 'pose') {
     let p = peers.get(m.id);
     if (!p) {
-      p = { snaps: [], ship: ship.clone(), body: new THREE.Mesh(walkerGeo, walkerMat), label: document.createElement('div'), trail: makeTrail() };
+      p = { snaps: [], ship: ship.clone(), label: document.createElement('div'), trail: makeTrail() };
       p.ship.getObjectByName('glow').scale.set(1, 1, 1);  // clone copies our current glow stretch
       p.ship.getObjectByName('glow').position.z = GLOW_Z;
       p.ship.getObjectByName('gear').visible = false;
       p.hull = hullMat.clone();
       p.hull.onBeforeCompile = hullMat.onBeforeCompile;   // clone() doesn't copy it
       p.ship.traverse(o => { if (o.material === hullMat) o.material = p.hull; });
+      p.body = makeWalker(p.hull);
       p.label.className = 'peer';
       document.body.append(p.label);
       scene.add(p.ship, p.body);
@@ -3058,7 +3153,7 @@ function goTo(p) {
 }
 
 const lerp3 = (a, b, k, out) => out.set(lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k));
-const qa = new THREE.Quaternion(), qb = new THREE.Quaternion();
+const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), walkD = new THREE.Vector3(), walkF = new THREE.Vector3(), walkR = new THREE.Vector3(), walkL = new THREE.Vector3(), walkM = new THREE.Matrix4();
 function updatePeers() {
   const t = performance.now() - 100;
   for (const p of peers.values()) {
@@ -3072,16 +3167,34 @@ function updatePeers() {
     p.ship.quaternion.slerpQuaternions(qa.fromArray(A.s, 3), qb.fromArray(B.s, 3), k);
     updateTrail(p.trail, lerp3(A.s, B.s, k, pv), p.ship.quaternion);
 
+    if (B.w && !p.body.visible) p.walkPrev = null;   // just stepped out: don't count the jump from the ship as walking
     p.body.visible = !!B.w;
     if (B.w) {
-      lerp3(A.w || B.w, B.w, k, pv);  // eye position; the capsule's centre sits 0.8 m below it
-      const r = Math.hypot(pv.x, pv.z);
-      pUp.set(-pv.x / r, 0, -pv.z / r);
-      p.body.position.copy(pv).addScaledVector(pUp, -0.8).sub(camPos);
-      p.body.quaternion.setFromUnitVectors(Y, pUp);
+      lerp3(A.w || B.w, B.w, k, pv);  // eye position; the feet are EYE below it
+      if (pv.distanceTo(MOON.c) < 2 * MOON.r) pUp.copy(pv).sub(MOON.c).normalize();
+      else { const r = Math.hypot(pv.x, pv.z); pUp.set(-pv.x / r, 0, -pv.z / r); }
+      // Speed and heading from the movement since the last frame: face the way they walk, keep it when still.
+      const now = performance.now(), dt = Math.min((now - (p.walkT ?? now)) / 1000, 0.1);
+      p.walkT = now;
+      walkD.copy(pv).sub(p.walkPrev ?? pv).projectOnPlane(pUp);
+      p.walkPrev = (p.walkPrev ?? new THREE.Vector3()).copy(pv);
+      const v = dt > 0 ? walkD.length() / dt : 0;
+      p.face ??= new THREE.Vector3().crossVectors(pUp, X);   // any direction along the ground until they move
+      if (v > 0.3) p.face.lerp(walkD.normalize(), 1 - Math.exp(-8 * dt));
+      walkF.copy(p.face).projectOnPlane(pUp);
+      if (walkF.lengthSq() < 1e-6) walkF.crossVectors(pUp, X);
+      walkF.normalize();
+      p.body.quaternion.setFromRotationMatrix(walkM.makeBasis(walkR.crossVectors(walkF, pUp), pUp, walkF.negate()));
+      p.body.position.copy(pv).addScaledVector(pUp, -EYE).sub(camPos);
+      // Limbs swing in step; the swing grows with speed up to a brisk walk and eases out when they stop.
+      p.stride = (p.stride ?? 0) + Math.min(v, 6) * dt * 2.6;
+      p.swing = lerp(p.swing ?? 0, Math.min(v / 3, 1) * 0.55, 1 - Math.exp(-6 * dt));
+      const sw = p.swing * Math.sin(p.stride), [la, ra, ll, rl] = p.body.limbs;
+      la.rotation.x = rl.rotation.x = sw;
+      ra.rotation.x = ll.rotation.x = -sw;
     }
 
-    placeLabel(p.label, (B.w ? p.body : p.ship).position, p.name);
+    placeLabel(p.label, B.w ? walkL.copy(pv).addScaledVector(pUp, 0.3).sub(camPos) : p.ship.position, p.name);
   }
 }
 
