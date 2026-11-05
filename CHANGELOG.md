@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/tracedelange/orbital/compare/v1.1.0...v1.1.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* shorter landing title and subtitle ([2244034](https://github.com/tracedelange/orbital/commit/2244034303c3d2ed0e82aca573aecde363f7a18d))
+
 ## [1.1.0](https://github.com/tracedelange/orbital/compare/v1.0.0...v1.1.0) (2026-11-05)
 
 
