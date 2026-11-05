@@ -22,7 +22,7 @@ The page runs alone when it cannot reach the relay.
 
 The game runs at https://orbital.tdelange.com.
 
-When the page opens from a server, a form asks for the name that other players see. The relay accepts 2 to 20 letters, numbers, spaces, dots, dashes or underscores, and rejects rude names. The page keeps the last name for the next visit. `?name=Alice` in the link fills in the form.
+A title card opens over the running scene. When the page opens from a server, the card asks for the name that other players see. The relay accepts 2 to 20 letters, numbers, spaces, dots, dashes or underscores, and rejects rude names. The page keeps the last name for the next visit. `?name=Alice` in the link fills in the form.
 
 The relay puts players in rooms of 8. A player joins the first room with space. When all rooms are full, the relay opens a new one, up to 20 rooms. After that, new players fly solo. The top-left box shows your room and how many other players are in it.
 
@@ -63,17 +63,22 @@ Click the scene to capture the mouse. Press Esc to release it.
 |---|---|
 | V | Change between ship and walk |
 | O | Overview of the whole ring |
-| H | Go back to the spawn point |
 | J | Go to another player |
-| G | Go to the next GSV (there are five) |
-| U | Go to the next spaceport on the outer face of the ring (there are four) |
 | L | Turn the ship's headlight on or off |
 | P | Stop or start the day cycle on your screen |
 | M | Turn sound on or off. Sound starts after your first click. |
+| Enter | Open the chat box |
 
 If the ship hits the ground or a GSV deck slowly, the shield takes the hit. If it hits at more than 120 m/s straight down, the ship explodes. After 3 seconds, the ship comes back 300 m above the crash site.
 
-The "LOD detail" slider sets how much terrain detail the page draws. A lower value is faster.
+The top-right box shows the speed, the top speed at this height, and the altitude. The ⚙ button opens the settings:
+
+- **Quality** is Auto, Low, Medium or High. Auto plays the first 10 seconds on Medium, then picks a preset from the frame rate. The page keeps the choice for the next visit.
+- **LOD detail** sets how much terrain detail the page draws. A lower value is faster. Each preset sets it.
+
+The page changes its render resolution to hold about 50 fps. Medium and High never go below 1×. Low goes down to 0.6×, which looks grainy but is faster. Low also turns off antialiasing from the next page load, draws fewer shrubs and buildings, and lowers the top speed near the ground.
+
+You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
 ## Notes for an agent
 

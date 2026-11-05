@@ -13,21 +13,32 @@
   }
   #hud b { color: #fff; }
   #perf {
-    position: fixed; right: 16px; top: 16px; color: #cfd8e6; width: 240px;
-    font: 12px/1.6 ui-monospace, Menlo, monospace; background: rgba(0,0,0,0.45);
-    padding: 10px 14px; border-radius: 6px;
+    position: fixed; right: 16px; top: 16px; color: #cfd8e6; text-align: right;
+    font: 12px/1.6 ui-monospace, Menlo, monospace;
   }
-  #perf input { width: 100%; }
-  #join {
-    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: 8px;
-    font: 14px ui-monospace, Menlo, monospace; background: rgba(0,0,0,0.6); padding: 16px; border-radius: 8px;
+  #flight { display: inline-block; vertical-align: top; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; }
+  #flight b { color: #fff; font-size: 15px; }
+  #flight span { color: #8fa0b8; }
+  #gear { vertical-align: top; font: 15px/1 sans-serif; color: #cfd8e6; background: rgba(0,0,0,0.45); border: 0; border-radius: 6px; padding: 8px 9px; cursor: pointer; }
+  #more { width: 240px; margin-top: 6px; text-align: left; background: rgba(0,0,0,0.45); padding: 10px 14px; border-radius: 6px; }
+  #more input { width: 100%; }
+  #more select { font: inherit; margin-left: 6px; }
+  #more[hidden], #landing[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
+  #landing {
+    position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; padding: 16px; box-sizing: border-box; text-align: center; color: #e6edf6; font: 14px/1.5 ui-monospace, Menlo, monospace;
+    background: radial-gradient(ellipse at center, rgba(2,3,10,0.3), rgba(2,3,10,0.85));
   }
-  #join[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
+  #landing h1 { margin: 0; font: 600 clamp(28px, 7vw, 52px)/1.1 ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.14em; text-transform: uppercase; }
+  #landing p { margin: 0; max-width: 460px; color: #b8c4d6; }
+  #landing .keys { font-size: 12px; color: #8fa0b8; }
+  #landing .keys b { color: #cfd8e6; }
+  body:has(#landing:not([hidden])) :is(#hud, #perf, #net, #chat) { display: none; }
   #net {
     position: fixed; left: 16px; top: 16px; color: #cfd8e6;
     font: 12px/1.6 ui-monospace, Menlo, monospace; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px;
   }
-  #join > div:first-child { display: flex; gap: 8px; }
+  #landing .row { display: flex; gap: 8px; }
   #joinMsg { color: #ffb4a8; font-size: 12px; }
   #joinMsg:empty { display: none; }
   #chat {
@@ -38,8 +49,8 @@
   #chatLog b { color: #ffd59a; }
   #chatLog .note { color: #9fb0c6; font-style: italic; }
   #chatIn { width: 100%; box-sizing: border-box; margin-top: 6px; font: inherit; padding: 6px 8px; border-radius: 4px; border: 1px solid #4a5568; background: rgba(11,15,24,0.85); color: #fff; }
-  #join input, #join button { font: inherit; padding: 8px 10px; border-radius: 4px; border: 1px solid #4a5568; background: #0b0f18; color: #fff; }
-  #join button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
+  #landing input, #landing button { font: inherit; padding: 8px 10px; border-radius: 4px; border: 1px solid #4a5568; background: #0b0f18; color: #fff; }
+  #landing button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
   .peer {
     position: fixed; left: 0; top: 0; color: #ffd59a; pointer-events: none; white-space: nowrap;
     font: 12px ui-monospace, Menlo, monospace; text-shadow: 0 0 3px #000;
@@ -55,13 +66,24 @@
 <body>
 <div id="hud"></div>
 <div id="net"></div>
-<form id="join" hidden><div><input id="joinName" maxlength="20" placeholder="Your name" autocomplete="off"><button>Fly</button></div><div id="joinMsg"></div></form>
+<form id="landing">
+  <h1>Culture Orbital</h1>
+  <p>A ring world 20,000 km across, in the spirit of Iain M. Banks's Culture. Fly it, walk it, and meet whoever else is here.</p>
+  <div class="row"><input id="joinName" maxlength="20" placeholder="Your name" autocomplete="off" autofocus><button>Fly</button></div>
+  <div id="joinMsg"></div>
+  <p class="keys"><b>Mouse</b> steer · <b>W/S</b> throttle · <b>A/D</b> roll · <b>V</b> walk · <b>Enter</b> chat</p>
+</form>
 <div id="chat"><div id="chatLog"></div><input id="chatIn" maxlength="200" placeholder="Say something · Enter sends · Esc closes" autocomplete="off" hidden></div>
 <div id="perf">
+  <div id="flight"></div>
+  <button id="gear" title="Settings">⚙</button>
+  <div id="more" hidden>
   <div id="fps">– fps</div>
   <div id="stats"></div>
+  <label>Quality<select id="quality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><br>
   <label>LOD detail <span id="lodLabel"></span></label>
   <input id="lod" type="range" min="1" max="4" step="0.5" value="2">
+  </div>
 </div>
 <script type="module">
 import * as THREE from 'three';
@@ -79,14 +101,31 @@ const WALL = 2e5;                       // 200 km walls
 const BOWL_T = 0.8;                     // the floor curves up into the wall from here outward
 const GRID = 32, MAX_LEVEL = 20, MAX_TILES = 8192;
 const EYE = 1.7, GRAVITY = 9.81;
-const DAY_RATE = 2 * Math.PI / 300;     // the shade turns once every 5 minutes
+const DAY_RATE = 2 * Math.PI / 1800;    // the shade turns once every 30 minutes
 
 const clamp = THREE.MathUtils.clamp, smoothstep = THREE.MathUtils.smoothstep, lerp = THREE.MathUtils.lerp;
 const wrapA = a => ((a % C) + C) % C;
 const f1 = x => x.toFixed(1);           // JS number -> GLSL float literal
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));   // full Retina density costs ~40% more pixel work for little gain
+// --- Quality ---
+// Presets trade detail for speed. lod: tile split distance. minRes, maxRes: the range dynamic resolution works
+// in (device pixels per CSS pixel); only low goes under 1, where the picture turns grainy. shrubR, buildR: chunk radii for shrubs and buildings. speedK: top speed per metre of height.
+// 'Auto' plays the first seconds at medium, picks a preset from how dynamic resolution copes, and saves it.
+// MSAA can only change when the page loads, so a new preset's aa applies on the next visit.
+const QUALITY = {
+  low:    { lod: 1,   minRes: 0.6, maxRes: 1,    aa: false, shrubR: 1, buildR: 3, speedK: 1 },
+  medium: { lod: 1.5, minRes: 1,   maxRes: 1.25, aa: true,  shrubR: 2, buildR: 4, speedK: 1.5 },
+  high:   { lod: 2,   minRes: 1,   maxRes: 1.5,  aa: true,  shrubR: 3, buildR: 6, speedK: 2 },
+};
+let qSetting = 'auto', qName = null;
+try { qSetting = localStorage.getItem('quality') || 'auto'; qName = qSetting === 'auto' ? localStorage.getItem('qualityAuto') : qSetting; } catch {}
+let Q = QUALITY[qName] ?? QUALITY.medium, autoPickAt = QUALITY[qName] ? Infinity : performance.now() + 10000;
+
+const renderer = new THREE.WebGLRenderer({ antialias: Q.aa, logarithmicDepthBuffer: true });
+// Dynamic resolution: the loop lowers this toward the preset's minRes when frames drop under 45 fps and
+// raises it back toward maxRes when they run near 60.
+let res = Math.min(devicePixelRatio, Q.maxRes);
+renderer.setPixelRatio(res);
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
@@ -508,7 +547,7 @@ waterMat.onBeforeCompile = patchTiles;
 // --- Quadtree tiles ---
 // The band unrolls to an (a, u) rectangle cut into ROOTS square root tiles. A tile splits into four while
 // the camera is closer than lodDetail × its size. Every tile draws the same GRID×GRID mesh by instancing.
-let lodDetail = 2;
+let lodDetail = Q.lod;
 const tileGeo = new THREE.InstancedBufferGeometry();
 {
   // (s, t) in [0, 1] across the tile. The outer ring of vertices repeats the edge with z = 1 to form the skirt.
@@ -582,8 +621,24 @@ function visit(ka, ku, level) {
 }
 
 const lodInput = document.getElementById('lod'), lodLabel = document.getElementById('lodLabel');
+const qualityIn = document.getElementById('quality');
 lodInput.addEventListener('input', () => { lodDetail = +lodInput.value; lodLabel.textContent = lodDetail; });
-lodLabel.textContent = lodDetail;
+function applyQuality(name) {
+  Q = QUALITY[name];
+  lodDetail = lodInput.value = lodLabel.textContent = Q.lod;
+  const top = Math.min(devicePixelRatio, Q.maxRes);
+  res = clamp(res, Math.min(Q.minRes, top), top);
+  renderer.setPixelRatio(res);
+}
+qualityIn.value = qSetting;
+lodInput.value = lodLabel.textContent = lodDetail;
+qualityIn.addEventListener('change', () => {
+  qSetting = qualityIn.value;
+  try { localStorage.setItem('quality', qSetting); localStorage.removeItem('qualityAuto'); } catch {}
+  if (qSetting === 'auto') autoPickAt = performance.now() + 10000;
+  else { autoPickAt = Infinity; applyQuality(qSetting); }
+  qualityIn.blur();   // so W/S fly the ship instead of changing the option
+});
 
 // --- Hull: the outer shell and wall rims, lathed around the axis. Profile points are (radius, y). ---
 // Inside, the terrain's bowl rises to meet the rim, so the inner wall faces sit hidden behind it.
@@ -713,7 +768,7 @@ const inTown = (a, u) => nearTowns.some(s => townQ(s, a, u) < 1.2);
 // The ground near the camera is cut into CHUNK-metre squares. Each square gets a fixed set of shrubs from
 // a hash of its index, placed with heightAt(). Instance matrices are stored relative to shrubOrigin, a
 // point near the camera, so they stay small enough for float32.
-const CHUNK = 64, CELL = 4, CHUNK_RADIUS = 3, MAX_SHRUBS = 30000, SHRUB_ALT = 400;
+const CHUNK = 64, CELL = 4, MAX_SHRUBS = 30000, SHRUB_ALT = 400;
 const NCHUNK_A = Math.floor(C / CHUNK);
 const shrubMesh = new THREE.InstancedMesh(
   new THREE.IcosahedronGeometry(1, 0),
@@ -725,7 +780,7 @@ shrubMesh.count = 0;
 scene.add(shrubMesh);
 const chunks = new Map();   // "ia,iu" -> array of shrubs {a, u, h, sx, sy, sz, rot, shade}
 const shrubOrigin = new THREE.Vector3();
-let shrubsDirty = false;
+let shrubsDirty = false, shrubsBuilt = 0;   // instances rebuilt at most 4 times a second, so fast flight doesn't stutter
 
 function makeChunk(ia, iu) {
   const list = [], per = CHUNK / CELL;
@@ -749,11 +804,11 @@ function updateShrubs() {
   const ca = Math.floor(a / CHUNK), cu = Math.floor(u / CHUNK);
   // Drop chunks that are out of range (or all of them when high up).
   for (const [key, c] of chunks) {
-    if (!nearGround || Math.abs(c.da(ca)) > CHUNK_RADIUS + 1 || Math.abs(c.iu - cu) > CHUNK_RADIUS + 1) { chunks.delete(key); shrubsDirty = true; }
+    if (!nearGround || Math.abs(c.da(ca)) > Q.shrubR + 1 || Math.abs(c.iu - cu) > Q.shrubR + 1) { chunks.delete(key); shrubsDirty = true; }
   }
   if (nearGround) {
     let budget = 3;  // chunks generated per frame, nearest first
-    for (let r = 0; r <= CHUNK_RADIUS && budget > 0; r++) {
+    for (let r = 0; r <= Q.shrubR && budget > 0; r++) {
       for (let i = -r; i <= r && budget > 0; i++) for (let j = -r; j <= r && budget > 0; j++) {
         if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
         const ia = ((ca + i) % NCHUNK_A + NCHUNK_A) % NCHUNK_A, iu = cu + j, key = ia + ',' + iu;
@@ -763,7 +818,7 @@ function updateShrubs() {
       }
     }
   }
-  if (shrubsDirty) rebuildShrubs(a, u);
+  if (shrubsDirty && performance.now() - shrubsBuilt > 250) rebuildShrubs(a, u);
   shrubMesh.position.copy(shrubOrigin).sub(camPos);
 }
 
@@ -786,7 +841,7 @@ function rebuildShrubs(a, u) {
   shrubMesh.count = n;
   shrubMesh.instanceMatrix.needsUpdate = true;
   if (shrubMesh.instanceColor) shrubMesh.instanceColor.needsUpdate = true;
-  shrubsDirty = false;
+  shrubsDirty = false; shrubsBuilt = performance.now();
 }
 
 // --- Buildings: Culture parkland in settlements near the camera ---
@@ -794,7 +849,7 @@ function rebuildShrubs(a, u) {
 // open grass. Buildings come in four soft-coloured forms (stepped terraces with planted tops, slim towers
 // with garden crowns, domes) turned to a hashed angle; city cores grow towers, outskirts grow domes.
 // Windows glow on the night side. Each form is its own instanced mesh; the shape is in unit size.
-const BCHUNK = 1000, BRADIUS = 6, MAX_BUILDINGS = 20000, MAX_TREES = 60000, BUILD_ALT = 30000;
+const BCHUNK = 1000, MAX_BUILDINGS = 20000, MAX_TREES = 60000, BUILD_ALT = 30000;
 const NBCHUNK_A = Math.floor(C / BCHUNK);
 const BUILD = [
   { spacing: 70, fp: [24, 44], density: 0.5 },   // city
@@ -832,7 +887,7 @@ bMeshes.tree = new THREE.InstancedMesh(treeGeo, withDay(new THREE.MeshStandardMa
 for (const m of Object.values(bMeshes)) { m.frustumCulled = false; m.count = 0; scene.add(m); }
 const bChunks = new Map();
 const bOrigin = new THREE.Vector3();
-let bDirty = false;
+let bDirty = false, bBuilt = 0;   // same limit as the shrubs
 
 function makeBuildingChunk(ia, iu) {
   const a0 = ia * BCHUNK, u0 = iu * BCHUNK, list = [];
@@ -885,11 +940,11 @@ function updateBuildings() {
   const ca = Math.floor(a / BCHUNK), cu = Math.floor(u / BCHUNK);
   for (const [key, c] of bChunks) {
     let d = c.ia - ca; d -= Math.round(d / NBCHUNK_A) * NBCHUNK_A;
-    if (!near || Math.abs(d) > BRADIUS + 1 || Math.abs(c.iu - cu) > BRADIUS + 1) { bChunks.delete(key); bDirty = true; }
+    if (!near || Math.abs(d) > Q.buildR + 1 || Math.abs(c.iu - cu) > Q.buildR + 1) { bChunks.delete(key); bDirty = true; }
   }
   if (near) {
     let budget = 2;
-    for (let r = 0; r <= BRADIUS && budget > 0; r++) {
+    for (let r = 0; r <= Q.buildR && budget > 0; r++) {
       for (let i = -r; i <= r && budget > 0; i++) for (let j = -r; j <= r && budget > 0; j++) {
         if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
         const ia = ((ca + i) % NBCHUNK_A + NBCHUNK_A) % NBCHUNK_A, iu = cu + j, key = ia + ',' + iu;
@@ -900,7 +955,7 @@ function updateBuildings() {
       }
     }
   }
-  if (bDirty) rebuildBuildings(a, u);
+  if (bDirty && performance.now() - bBuilt > 250) rebuildBuildings(a, u);
   for (const m of Object.values(bMeshes)) m.position.copy(bOrigin).sub(camPos);
 }
 
@@ -926,7 +981,7 @@ function rebuildBuildings(a, u) {
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
   }
-  bDirty = false;
+  bDirty = false; bBuilt = performance.now();
 }
 
 // --- Ship, character and camera ---
@@ -1042,9 +1097,11 @@ const SHIP_MAX = 2e5, CLEARANCE = 3;
 const shipPos = new THREE.Vector3(), shipQ = new THREE.Quaternion(), camQ = new THREE.Quaternion();
 const CHASE = new THREE.Vector3(0, 6, 25);
 let shipSpeed = 100, shipAlt = Infinity;   // shipAlt: height over the ground, water or GSV deck below
-// Top speed grows with that height, so low flight stays controllable: 150 m/s at 50 m, 2 km/s at 1 km,
-// the full SHIP_MAX from 100 km up. Above the cap, speed bleeds off over about a second.
-const speedCap = () => Math.min(SHIP_MAX, 50 + 2 * shipAlt);
+const groundUp = new THREE.Vector3();       // up at the surface under the ship, for its shadow
+// Top speed grows with that height, so low flight stays controllable. On high: 150 m/s at 50 m, 2 km/s at 1 km,
+// the full SHIP_MAX from 100 km up. Lower presets grow it more slowly, so less terrain streams in per second.
+// Above the cap, speed bleeds off over about a second.
+const speedCap = () => Math.min(SHIP_MAX, 50 + Q.speedK * shipAlt);
 
 let mode = 'ship', walkSpeed = 5, spinning = true, muted = false;
 const player = { a: 0, u: 0, yaw: 0, pitch: 0, z: 0, vz: 0, gsv: null }; // z: height above ground while jumping; gsv: the GSV whose deck they're on
@@ -1406,22 +1463,14 @@ function updateGsv() {
   }
 }
 
-// G goes to each GSV in turn: 15 km off its west end, 1 km above the deck, facing east along it, stopped.
-let gsvNext = 0;
-function goToGsv() {
-  const g = GSVS[gsvNext++ % GSVS.length];
-  shipQ.copy(g.q);
-  deckPoint(g, -g.L / 2 - 15000, 0, 1000, shipPos);
-  camQ.copy(shipQ);
-  shipSpeed = 0;
-  mode = 'ship';
-  updateHud();
-}
-
 function spawn() {
-  // In the ship, 300 m over the land strip, 60 km west of the first GSV and facing it.
-  const a = wrapA(GSVS[0].a - GSVS[0].L / 2 - 60000);
-  ringPoint(a, 0, Math.max(heightAt(a, 0), 0) + 300, shipPos);
+  // In the ship, 300 m up, 60 km west of a GSV and facing it. The GSV is one in good light (within
+  // 1 rad of noon) with the most daylight left; the GSVs are 72° apart, so one always qualifies.
+  // Noon is at azimuth uDayAngle, and it moves toward larger azimuths.
+  const off = g => { const d = g.a / R - dayUniforms.uDayAngle.value; return d - Math.round(d / (2 * Math.PI)) * 2 * Math.PI; };
+  const g = GSVS.filter(g => Math.abs(off(g)) < 1).sort((x, y) => off(y) - off(x))[0];   // largest offset: earliest in its morning
+  const a = wrapA(g.a - g.L / 2 - 60000);
+  ringPoint(a, g.u, Math.max(heightAt(a, g.u), 0) + 300, shipPos);
   levelQ(a, shipQ);
   camQ.copy(shipQ);
   shipSpeed = 100;
@@ -1458,9 +1507,22 @@ function toShip() {
   updateHud();
 }
 
+// O shows the whole ring from 20,000 km out; O again goes back to where you were, if you haven't flown off.
+let beforeOverview = null;
+const OVERVIEW_POS = new THREE.Vector3(0, 0.9 * R, 2.2 * R);
 function overview() {
+  if (beforeOverview && shipPos.distanceTo(OVERVIEW_POS) < 1e5) {
+    const b = beforeOverview;
+    beforeOverview = null;
+    shipPos.copy(b.pos); shipQ.copy(b.q); camQ.copy(b.q); shipSpeed = b.speed;
+    Object.assign(player, b.player);
+    mode = b.mode;
+    updateHud();
+    return;
+  }
+  beforeOverview = { pos: shipPos.clone(), q: shipQ.clone(), speed: shipSpeed, mode, player: { ...player } };
   mode = 'ship';
-  shipPos.set(0, 0.9 * R, 2.2 * R);
+  shipPos.copy(OVERVIEW_POS);
   shipQ.setFromRotationMatrix(new THREE.Matrix4().lookAt(shipPos, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)));
   camQ.copy(shipQ);
   shipSpeed = 0;
@@ -1470,6 +1532,32 @@ function overview() {
 const east = new THREE.Vector3(), up = new THREE.Vector3(), fwd = new THREE.Vector3(), fwdP = new THREE.Vector3(),
       upP = new THREE.Vector3(), right = new THREE.Vector3(), basis = new THREE.Matrix4(), dq = new THREE.Quaternion();
 const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
+
+// Shadow: the sun is always straight overhead, so the ship's shadow is a soft ellipse on the surface
+// right below it. It grows softer and fades as the ship climbs, and fades out at night.
+const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+{
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const cx = cv.getContext('2d'), gr = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.5, 'rgba(0,0,0,0.8)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  cx.fillStyle = gr; cx.fillRect(0, 0, 64, 64);
+  shadow.material.map = new THREE.CanvasTexture(cv);
+}
+shadow.frustumCulled = false;
+scene.add(shadow);
+const shadowFwd = new THREE.Vector3(), shadowRight = new THREE.Vector3(), shadowBasis = new THREE.Matrix4();
+function updateShadow() {
+  const fade = (1 - smoothstep(shipAlt, 30, 1500)) * dayUniforms.uLocalDay.value;
+  shadow.visible = ship.visible && fade > 0.01;
+  if (!shadow.visible) return;
+  shadowFwd.set(0, 0, -1).applyQuaternion(shipQ).projectOnPlane(groundUp).normalize();
+  shadowRight.crossVectors(shadowFwd, groundUp);
+  shadow.quaternion.setFromRotationMatrix(shadowBasis.makeBasis(shadowRight, shadowFwd, groundUp));
+  const blur = 1 + shipAlt / 300;   // a wider, softer edge from higher up
+  shadow.scale.set(2 * TIP_X * 1.3 * blur, 14 * blur, 1);
+  shadow.position.copy(shipPos).addScaledVector(groundUp, 1.5 - shipAlt).sub(camPos);   // 1.5 m up, clear of the terrain
+  shadow.material.opacity = 0.5 * fade / blur;
+}
 
 function updateShip(dt) {
   if (keys.has('KeyW')) shipSpeed = Math.min(Math.max(shipSpeed, 5) * Math.exp(1.5 * dt), SHIP_MAX);
@@ -1502,6 +1590,7 @@ function updateShip(dt) {
       if (impact(shipSpeed * Math.max((fwd.x * shipPos.x + fwd.z * shipPos.z) / minR, 0), up.set(-shipPos.x / minR, 0, -shipPos.z / minR))) return;
     }
     shipAlt = Math.max(minR + CLEARANCE - Math.min(r, minR), 0);
+    groundUp.set(-shipPos.x / r, 0, -shipPos.z / r);
   }
   // And above a GSV deck.
   const dk = deckLocal(shipPos);
@@ -1511,7 +1600,8 @@ function updateShip(dt) {
       shipPos.addScaledVector(dk.g.UP, g - dk.h);
       if (impact(shipSpeed * Math.max(-fwd.dot(dk.g.UP), 0), dk.g.UP)) return;
     }
-    shipAlt = Math.min(shipAlt, Math.max(dk.h, g) - g + CLEARANCE);
+    const deckAlt = Math.max(dk.h, g) - g + CLEARANCE;
+    if (deckAlt < shipAlt) { shipAlt = deckAlt; groundUp.copy(dk.g.UP); }
   }
 
   // Chase camera: lags the ship's turns a little, then sits behind and above it.
@@ -1574,15 +1664,12 @@ addEventListener('mousemove', e => {
   }
 });
 addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;   // typing in the join form or chat
+  if (e.target.tagName === 'INPUT' || !landing.hidden) return;   // typing in the landing card or chat
   if (e.code === 'Enter') return openChat();
   keys.add(e.code);
   if (e.code === 'KeyV') mode === 'walk' ? toShip() : toWalk();
   if (e.code === 'KeyO') overview();
-  if (e.code === 'KeyH') spawn();
   if (e.code === 'KeyJ' && peers.size) goTo(peers.values().next().value);
-  if (e.code === 'KeyG') goToGsv();
-  if (e.code === 'KeyU') goToPort();
   if (e.code === 'KeyL') { headlight.intensity = headlight.intensity ? 0 : 3; updateHud(); }   // intensity, not visible: no shader rebuild
   if (e.code === 'KeyM') { muted = !muted; updateHud(); }
   if (e.code === 'KeyP') { spinning = !spinning; updateHud(); }
@@ -1603,11 +1690,9 @@ const hud = document.getElementById('hud');
 const fmtSpeed = v => { const mph = v * 2.23694; return `${mph < 100 ? mph.toFixed(1) : Math.round(mph).toLocaleString()} mph`; };
 function updateHud() {
   const top = mode === 'walk'
-    ? `<b>WALK</b> &nbsp; <b>Click</b> look (Esc releases) &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump (scales with speed)<br>` +
-      `<b>Scroll</b> speed (${fmtSpeed(walkSpeed)}) &nbsp; `
-    : `<b>SHIP</b> &nbsp; <b>Click</b> steer with mouse (Esc releases) &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll<br>` +
-      `<b>Scroll</b> throttle &nbsp; `;
-  hud.innerHTML = top + `<b>V</b> walk/ship &nbsp; <b>O</b> overview &nbsp; <b>H</b> respawn &nbsp; <b>J</b> join other player &nbsp; <b>G</b> next GSV &nbsp; <b>U</b> spaceport &nbsp; <b>P</b> day cycle ${spinning ? 'on' : 'off'} &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'} &nbsp; <b>L</b> headlight ${headlight.intensity ? 'on' : 'off'}`;
+    ? `<b>WALK</b> &nbsp; <b>Click</b> look &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump &nbsp; <b>Scroll</b> speed (${fmtSpeed(walkSpeed)})<br>`
+    : `<b>SHIP</b> &nbsp; <b>Click</b> steer &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll &nbsp; <b>Esc</b> frees the mouse<br>`;
+  hud.innerHTML = top + `<b>V</b> walk/ship &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>J</b> go to a player &nbsp; <b>Enter</b> chat &nbsp; <b>L</b> headlight &nbsp; <b>P</b> day cycle &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
 }
 spawn();
 
@@ -1746,11 +1831,11 @@ function updateAudio() {
   const p = mode === 'walk' ? camPos : shipPos;
   const alt = R - Math.hypot(p.x, p.z), dens = Math.abs(p.y) < HW && alt > -4000 ? Math.exp(-Math.max(alt, 0) / 8000) : 0;
   const air = mode === 'ship' ? dens * Math.min(shipSpeed / 300, 1) : 0;
-  audio.out.gain.setTargetAtTime(muted ? 0 : 1, t, k);
+  audio.out.gain.setTargetAtTime(muted ? 0 : 0.5, t, k);
   audio.engine.gain.setTargetAtTime(mode === 'ship' ? 0.03 + 0.05 * felt : 0, t, k);
   audio.oscs.forEach(o => o.frequency.setTargetAtTime(45 + 110 * felt, t, k));
   audio.lp.frequency.setTargetAtTime(200 + 1800 * felt, t, k);
-  audio.wind.gain.setTargetAtTime(0.25 * air, t, k);
+  audio.wind.gain.setTargetAtTime(0.12 * air, t, k);
   audio.bp.frequency.setTargetAtTime(300 + 1700 * felt, t, k);
 }
 
@@ -1869,18 +1954,6 @@ function updatePorts() {
     P.chase.forEach((m, k) => { m.visible = Math.floor(t * 8) % 16 === k; });
   }
 }
-// U goes to each port in turn: 240 km west, 80 km out from the hull, facing east toward the spindle, stopped.
-let portNext = 0;
-function goToPort() {
-  const P = PORTS[portNext++ % PORTS.length];
-  shipQ.copy(P.q);
-  deckPoint(P, -60000 * PORT_SCALE, 0, -20000 * PORT_SCALE, shipPos);
-  camQ.copy(shipQ);
-  shipSpeed = 0;
-  mode = 'ship';
-  updateHud();
-}
-
 // GSV traffic: shuttles (the cargo craft) work each GSV, in its deck coordinates. Each hull port sends
 // craft out and back on a ping-pong path with a staggered phase; 8 more per GSV circle the hull in loops
 // of different size, height and speed.
@@ -1968,23 +2041,27 @@ function updateTraffic(dt) {
 const peers = new Map();  // id -> { name, snaps: [{ t, s, w }], ship, body, label }
 const walkerGeo = new THREE.CapsuleGeometry(0.3, 1.2, 4, 8);
 const walkerMat = withDay(new THREE.MeshStandardMaterial({ color: 0xff9f43, roughness: 0.6 }), 'local');
-// Your name: the join form, shown only when served (there's no one to meet when opened as a file), filled
-// from ?name= or the last name used. The server checks it (length, characters, profanity) and answers
-// name-ok or name-bad; nothing goes out until it's ok. If the rooms are full or the server is gone, the
-// form closes and you fly solo.
-const joinForm = document.getElementById('join'), joinName = document.getElementById('joinName'), joinMsg = document.getElementById('joinMsg');
+// Landing card: title, name and Fly, over the scene already running behind it. The name field shows only
+// while the relay is reachable (there's no one to meet when opened as a file, offline or with all rooms
+// full), filled from ?name= or the last name used. The relay checks it (length, characters, profanity)
+// and answers name-ok or name-bad; nothing goes out until it's ok.
+const landing = document.getElementById('landing'), joinName = document.getElementById('joinName'), joinMsg = document.getElementById('joinMsg');
 let myName = null, roomNo = null, full = false;
-if (location.host) {
-  try { joinName.value = new URLSearchParams(location.search).get('name') || localStorage.getItem('name') || ''; } catch {}
-  joinForm.hidden = false;
-  joinName.focus();
-  joinForm.onsubmit = e => {
-    e.preventDefault();
-    startAudio();   // the click counts as the gesture audio needs
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'name', name: joinName.value }));
-    else joinForm.hidden = true;
-  };
+try { joinName.value = new URLSearchParams(location.search).get('name') || localStorage.getItem('name') || ''; } catch {}
+joinName.hidden = !location.host;
+function enter() {
+  landing.hidden = true;
+  // Fails, by throwing or by rejecting, once the click's gesture has expired; then the next click locks.
+  try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch {}
 }
+landing.onsubmit = e => {
+  e.preventDefault();
+  startAudio();   // the click counts as the gesture audio needs
+  const sendName = () => ws.send(JSON.stringify({ type: 'name', name: joinName.value }));
+  if (joinName.hidden) enter();
+  else if (ws.readyState === WebSocket.OPEN) sendName();
+  else ws.addEventListener('open', sendName, { once: true });   // still connecting; if it fails, the field hides and Fly enters solo
+};
 const Y = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), pUp = new THREE.Vector3();
 let epoch = null, seekPeer = false;
 
@@ -1998,7 +2075,7 @@ function updateNet() {
     : `room ${roomNo} · <b>${myName}</b> · ${peers.size} other${peers.size === 1 ? '' : 's'} here · <b>Enter</b> chat`;
 }
 ws.onopen = updateNet;
-ws.onclose = () => { joinForm.hidden = true; updateNet(); };
+ws.onclose = () => { joinName.hidden = true; joinMsg.textContent = ''; updateNet(); };
 ws.onmessage = e => {
   const m = JSON.parse(e.data);
   if (m.type === 'hello') {
@@ -2013,7 +2090,7 @@ ws.onmessage = e => {
   } else if (m.type === 'name-ok') {
     myName = m.name;   // server-cleaned, so safe to put in innerHTML
     try { localStorage.setItem('name', myName); } catch {}
-    joinForm.hidden = true;
+    enter();
     updateNet();
   } else if (m.type === 'name-bad') {
     joinMsg.textContent = m.reason;
@@ -2117,7 +2194,9 @@ function updatePeers() {
 }
 
 const clock = new THREE.Clock();
-const fpsEl = document.getElementById('fps'), statsEl = document.getElementById('stats');
+const fpsEl = document.getElementById('fps'), statsEl = document.getElementById('stats'), flightEl = document.getElementById('flight');
+const moreEl = document.getElementById('more');
+document.getElementById('gear').onclick = e => { moreEl.hidden = !moreEl.hidden; e.currentTarget.blur(); };
 let frames = 0, fpsT = performance.now();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
@@ -2135,6 +2214,7 @@ renderer.setAnimationLoop(() => {
   dayUniforms.uLocalDay.value = dayFactor(Math.atan2(camPos.z, camPos.x));
   dayUniforms.uCamPos.value.copy(camPos);
   ship.position.copy(shipPos).sub(camPos);
+  updateShadow();
   ship.quaternion.copy(shipQ);
   lamp.position.copy(ship.position);
   lamp.quaternion.copy(shipQ);
@@ -2152,19 +2232,32 @@ renderer.setAnimationLoop(() => {
   updateTowns();
   updateShrubs();
   updateBuildings();
-  renderer.render(scene, camera);
 
   frames++;
   const now = performance.now();
   if (now - fpsT >= 500) {
-    fpsEl.textContent = `${Math.round(frames * 1000 / (now - fpsT))} fps · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris drawn`;
+    const fps = frames * 1000 / (now - fpsT), top = Math.min(devicePixelRatio, Q.maxRes), floor = Math.min(Q.minRes, top);
+    if (now > 3000) {   // the first seconds are shader compiles
+      if (fps < 45 && res > floor) renderer.setPixelRatio(res = Math.max(floor, res * 0.85));
+      else if (fps > 57 && res < top) renderer.setPixelRatio(res = Math.min(top, res * 1.1));
+    }
+    if (now > autoPickAt) {
+      autoPickAt = Infinity;
+      qName = fps < 40 ? 'low' : res >= top && fps > 57 ? 'high' : 'medium';
+      try { localStorage.setItem('qualityAuto', qName); } catch {}
+      applyQuality(qName);
+    }
+    const qLabel = Object.keys(QUALITY).find(k => QUALITY[k] === Q);
+    fpsEl.textContent = `${Math.round(fps)} fps · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris · res ${res.toFixed(2)}× · ${qLabel}${autoPickAt < Infinity ? ' (testing)' : ''}`;
     const p = mode === 'walk' ? camPos : shipPos, alt = R - Math.hypot(p.x, p.z);
+    const altText = alt < 1e4 ? alt.toFixed(0) + ' m' : (alt / 1000).toFixed(0) + ' km';
+    const capped = keys.has('KeyW') && speedCap() < SHIP_MAX && shipSpeed > 0.97 * speedCap();   // throttling into the height limit
+    flightEl.innerHTML = (mode === 'ship' ? `<b>${fmtSpeed(shipSpeed)}</b>${capped ? ' <span>· climb to go faster</span>' : ''}<br>` : '') + `<span>altitude</span> ${altText}`;
     statsEl.innerHTML = `${tileCount} tiles${deckCount ? ` + ${deckCount} deck` : ''}, deepest level ${deepest}<br>` +
-      `finest spacing ${(TILE0 / 2 ** deepest / GRID).toFixed(3)} m<br>` +
-      `altitude ${alt < 1e4 ? alt.toFixed(1) + ' m' : (alt / 1000).toFixed(0) + ' km'}` +
-      (mode === 'ship' ? `<br>speed ${fmtSpeed(shipSpeed)} (max ${fmtSpeed(speedCap())})` : '') + `<br>${shrubMesh.count} shrubs, ${bMeshes.terrace.count + bMeshes.tower.count + bMeshes.dome.count} buildings, ${bMeshes.tree.count} trees, ${nearTowns.length} settlements near`;
+      `finest spacing ${(TILE0 / 2 ** deepest / GRID).toFixed(3)} m<br>${shrubMesh.count} shrubs, ${bMeshes.terrace.count + bMeshes.tower.count + bMeshes.dome.count} buildings, ${bMeshes.tree.count} trees, ${nearTowns.length} settlements near`;
     frames = 0; fpsT = now;
   }
+  renderer.render(scene, camera);   // after any resolution change, which clears the canvas
 });
 </script>
 </body>
