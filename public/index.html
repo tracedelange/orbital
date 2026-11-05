@@ -51,6 +51,7 @@
   #chatIn { width: 100%; box-sizing: border-box; margin-top: 6px; font: inherit; padding: 6px 8px; border-radius: 4px; border: 1px solid #4a5568; background: rgba(11,15,24,0.85); color: #fff; }
   #landing input, #landing button { font: inherit; padding: 8px 10px; border-radius: 4px; border: 1px solid #4a5568; background: #0b0f18; color: #fff; }
   #landing button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
+  .nolabels .peer { visibility: hidden; }   /* N hides every label */
   .peer {
     position: fixed; left: 0; top: 0; color: #ffd59a; pointer-events: none; white-space: nowrap;
     font: 12px ui-monospace, Menlo, monospace; text-shadow: 0 0 3px #000;
@@ -102,6 +103,12 @@ const BOWL_T = 0.8;                     // the floor curves up into the wall fro
 const GRID = 32, MAX_LEVEL = 20, MAX_TILES = 8192;
 const EYE = 1.7, GRAVITY = 9.81;
 const DAY_RATE = 2 * Math.PI / 1800;    // the shade turns once every 30 minutes
+// Fixed landmarks, placed clear of the GSVs and of the terrain patches their decks copy (θ ≈ 0.43, 0.64,
+// 3.54, 4.27, 5.14). Positions are arc length a and across-ring u, in metres.
+const MOUNTAIN = { a: 4e5, u: -6e4, r: 9e4, h: 22000 };   // one peak ~3x the tallest ranges, 400 km east of the first GSV
+const STRAITS = [2.0, 4.094, 6.189].map(th => th * R);   // the land strip gives way to sea and islands here
+const STRAIT_IN = 1e5, STRAIT_OUT = 2e5;                  // all sea within 100 km, all land beyond 200 km
+const MEGAS = [{ a: 0.15 * R, u: 3e4, r: 12000 }, { a: 3.2 * R, u: -2e4, r: 12000 }];   // super cities on flattened ground
 
 const clamp = THREE.MathUtils.clamp, smoothstep = THREE.MathUtils.smoothstep, lerp = THREE.MathUtils.lerp;
 const wrapA = a => ((a % C) + C) % C;
@@ -331,16 +338,25 @@ float tFbm(uvec3 idx, vec2 st, int start, int oct, uint seed) {
 }
 // Where the land strip ends, as t. A sum of whole-number sines so it repeats exactly once per lap.
 float landEdge(float th) { return 0.31 + 0.07 * sin(3.0 * th + 1.3) + 0.05 * sin(7.0 * th + 0.4) + 0.03 * sin(17.0 * th + 2.1); }
+// Arc distance in metres from angle th to angle th0, wrapped around the ring.
+float arcD(float th, float th0) { float d = th - th0; return (d - 6.2831853 * floor(d / 6.2831853 + 0.5)) * ${f1(R)}; }
 // Each tile gets octaves down to about two of its vertex spacings, so detail appears as you approach.
 float terrainHeight(uvec3 idx, vec2 st, float th, float u, out float n, out float river, out float lake) {
   int oct = int(idx.z) + 2;
   float t = abs(u) / ${f1(HW)};
   float le = landEdge(th);
   float land = 1.0 - smoothstep(le - 0.09, le + 0.09, t);
+  ${STRAITS.map(a => `land *= smoothstep(${f1(STRAIT_IN)}, ${f1(STRAIT_OUT)}, abs(arcD(th, ${(a / R).toFixed(6)})));`).join('\n  ')}
   n = tFbm(idx, st, 0, oct, 0u);
   float m = tFbm(idx, st, 0, min(oct, 12), 100u);
   river = abs(tFbm(idx, st, 0, min(oct, 6), 200u));
   lake = tFbm(idx, st, 0, min(oct, 5), 300u);
+  // Landmarks: mk rises to 1 at the mountain's summit, ck is 1 on a super city's flattened ground.
+  // Both keep rivers and lakes off them.
+  float mk = clamp(1.0 - length(vec2(arcD(th, ${(MOUNTAIN.a / R).toFixed(6)}), u - ${f1(MOUNTAIN.u)})) / ${f1(MOUNTAIN.r)}, 0.0, 1.0), ck = 0.0;
+  ${MEGAS.map(c => `ck = max(ck, 1.0 - smoothstep(${f1(1.7 * c.r)}, ${f1(2.5 * c.r)}, length(vec2(arcD(th, ${(c.a / R).toFixed(6)}), u - ${f1(c.u)}))));`).join('\n  ')}
+  river += 0.3 * max(mk, ck);
+  lake -= max(mk, ck);
   // Sea floor with islands, which fade out before the bowl.
   float seaFloor = max(-1500.0 + n * 4500.0 * (1.0 - smoothstep(0.68, 0.78, t)), -3000.0);
   // Land: rolling ground plus ridged ranges up to ~8 km where the base noise is high. Rivers follow the
@@ -350,6 +366,8 @@ float terrainHeight(uvec3 idx, vec2 st, float th, float u, out float n, out floa
   float relief = abs(m) * 1200.0 + n * 500.0 + ridge * ridge * ridge * 8000.0 * smoothstep(-0.1, 0.4, n);
   float valley = min(smoothstep(0.0, 0.1, river), 1.0 - smoothstep(0.4, 0.55, lake));
   float landH = 150.0 + relief * valley - 10.0 * (1.0 - smoothstep(0.005, 0.012, river)) - 10.0 * smoothstep(0.55, 0.6, lake);
+  landH += ${f1(MOUNTAIN.h)} * mk * mk * (0.8 + 0.3 * ridge);   // concave sides up to a point
+  landH = mix(landH, 150.0, ck);
   // The floor curves up into the wall, steepening as it rises.
   float s = max(t - ${BOWL_T}, 0.0) / ${f1(1 - BOWL_T)};
   return mix(seaFloor, landH, land) + ${f1(WALL)} * s * s * s;
@@ -380,19 +398,26 @@ function tFbm(a, u, oct, seed) {
   }
   return s;
 }
+const arcDelta = (a, b) => { let d = a - b; return d - Math.round(d / C) * C; };   // wrapped arc distance
 const landEdge = th => 0.31 + 0.07 * Math.sin(3 * th + 1.3) + 0.05 * Math.sin(7 * th + 0.4) + 0.03 * Math.sin(17 * th + 2.1);
 const bowlH = u => WALL * (Math.max(Math.abs(u) / HW - BOWL_T, 0) / (1 - BOWL_T)) ** 3;
 // Returns [height, wet]; wet is true on rivers and lakes.
 function terrainAt(a, u) {
   const oct = MAX_LEVEL + 2, t = Math.abs(u) / HW, le = landEdge(a / R);
-  const land = 1 - smoothstep(t, le - 0.09, le + 0.09);
+  let land = 1 - smoothstep(t, le - 0.09, le + 0.09);
+  for (const sa of STRAITS) land *= smoothstep(Math.abs(arcDelta(a, sa)), STRAIT_IN, STRAIT_OUT);
   const n = tFbm(a, u, oct, 0), m = tFbm(a, u, Math.min(oct, 12), 100);
-  const river = Math.abs(tFbm(a, u, Math.min(oct, 6), 200)), lake = tFbm(a, u, Math.min(oct, 5), 300);
+  const mk = clamp(1 - Math.hypot(arcDelta(a, MOUNTAIN.a), u - MOUNTAIN.u) / MOUNTAIN.r, 0, 1);
+  let ck = 0;
+  for (const c of MEGAS) ck = Math.max(ck, 1 - smoothstep(Math.hypot(arcDelta(a, c.a), u - c.u), 1.7 * c.r, 2.5 * c.r));
+  const river = Math.abs(tFbm(a, u, Math.min(oct, 6), 200)) + 0.3 * Math.max(mk, ck), lake = tFbm(a, u, Math.min(oct, 5), 300) - Math.max(mk, ck);
   const seaFloor = Math.max(-1500 + n * 4500 * (1 - smoothstep(t, 0.68, 0.78)), -3000);
   const ridge = Math.max(1 - Math.abs(m), 0);
   const relief = Math.abs(m) * 1200 + n * 500 + ridge ** 3 * 8000 * smoothstep(n, -0.1, 0.4);
   const valley = Math.min(smoothstep(river, 0, 0.1), 1 - smoothstep(lake, 0.4, 0.55));
-  const landH = 150 + relief * valley - 10 * (1 - smoothstep(river, 0.005, 0.012)) - 10 * smoothstep(lake, 0.55, 0.6);
+  let landH = 150 + relief * valley - 10 * (1 - smoothstep(river, 0.005, 0.012)) - 10 * smoothstep(lake, 0.55, 0.6);
+  landH += MOUNTAIN.h * mk * mk * (0.8 + 0.3 * ridge);   // concave sides up to a point
+  landH = lerp(landH, 150, ck);
   return [lerp(seaFloor, landH, land) + bowlH(u), land > 0.5 && (river < 0.0075 || lake > 0.57)];
 }
 const heightAt = (a, u) => terrainAt(a, u)[0];
@@ -702,7 +727,6 @@ const TIERS = [
 ];
 const townUniforms = { uTowns: { value: Array.from({ length: 64 }, () => new THREE.Vector4()) }, uTownCount: { value: 0 } };
 const settleCache = new Map();
-const arcDelta = (a, b) => { let d = a - b; return d - Math.round(d / C) * C; };
 
 function settlementInCell(ti, ci, cj) {
   const key = ti + ',' + ci + ',' + cj;
@@ -733,9 +757,11 @@ const townShape = (r, da, du) => {
 };
 const townQ = (s, a, u) => { const da = arcDelta(a, s.a), du = u - s.u; return Math.hypot(da, du) / (s.r * townShape(s.r, da, du)); };
 
+// Super cities count as cities, with fixed spots and flattened ground (see MEGAS).
+for (const c of MEGAS) Object.assign(c, { h: heightAt(c.a, c.u), tier: 0 });
 // Settlements of every tier within each tier's range of (a, u), or within `range` if given.
 function settlementsNear(a, u, range) {
-  const out = [];
+  const out = MEGAS.filter(c => Math.hypot(arcDelta(c.a, a), c.u - u) < (range ?? TIERS[0].range) + TOWN_REACH * c.r);
   TIERS.forEach((T, ti) => {
     const R0 = range ?? T.range, n = Math.ceil(R0 / T.cell) + 1;
     const ci0 = Math.floor(a / T.cell), cj0 = Math.floor(u / T.cell), N = Math.floor(C / T.cell);
@@ -1669,6 +1695,7 @@ addEventListener('keydown', e => {
   keys.add(e.code);
   if (e.code === 'KeyV') mode === 'walk' ? toShip() : toWalk();
   if (e.code === 'KeyO') overview();
+  if (e.code === 'KeyN') { document.body.classList.toggle('nolabels'); updateHud(); }
   if (e.code === 'KeyJ' && peers.size) goTo(peers.values().next().value);
   if (e.code === 'KeyL') { headlight.intensity = headlight.intensity ? 0 : 3; updateHud(); }   // intensity, not visible: no shader rebuild
   if (e.code === 'KeyM') { muted = !muted; updateHud(); }
@@ -1692,7 +1719,7 @@ function updateHud() {
   const top = mode === 'walk'
     ? `<b>WALK</b> &nbsp; <b>Click</b> look &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump &nbsp; <b>Scroll</b> speed (${fmtSpeed(walkSpeed)})<br>`
     : `<b>SHIP</b> &nbsp; <b>Click</b> steer &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll &nbsp; <b>Esc</b> frees the mouse<br>`;
-  hud.innerHTML = top + `<b>V</b> walk/ship &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>J</b> go to a player &nbsp; <b>Enter</b> chat &nbsp; <b>L</b> headlight &nbsp; <b>P</b> day cycle &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
+  hud.innerHTML = top + `<b>V</b> walk/ship &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>J</b> go to a player &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> labels &nbsp; <b>L</b> headlight &nbsp; <b>P</b> day cycle &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
 }
 spawn();
 
@@ -1945,7 +1972,33 @@ for (const P of PORTS) {
   P.label.className = 'peer';
   document.body.append(P.label);
 }
+// Super-city skylines: 120 towers of 300-1,500 m each, drawn out to 600 km (the chunked buildings only reach
+// a few km). Laid out once in the city's level frame (local -Z east, +Y up, X across), then moved with the camera.
+const MEGA_TOWERS = 120;
+for (const c of MEGAS) {
+  const m = new THREE.InstancedMesh(FORMS.tower, buildingMat, MEGA_TOWERS), M = new THREE.Matrix4(), p = new THREE.Vector3(),
+        one = new THREE.Quaternion(), sc = new THREE.Vector3(), col = new THREE.Color(0.92, 0.94, 0.97);
+  for (let i = 0; i < MEGA_TOWERS; i++) {
+    const h = tHash(i, c.a | 0, 4000), h2 = tHash(i, c.a | 0, 4001);
+    const ang = (h & 1023) / 1024 * 2 * Math.PI, q = 0.85 * Math.sqrt(((h >>> 10) & 1023) / 1024);   // q: share of the way to the edge
+    const d = q * c.r * townShape(c.r, Math.cos(ang), Math.sin(ang)), x = d * Math.cos(ang), y = d * Math.sin(ang);
+    const height = 300 + 1200 * (1 - q) ** 2 * (0.4 + 0.6 * (h2 & 255) / 255), w = 60 + 60 * ((h2 >>> 8) & 255) / 255;
+    m.setMatrixAt(i, M.compose(p.set(-y, x * x / (2 * R) - 2, -x), one, sc.set(w, height, w)));   // the floor curves up by x²/2R
+    m.setColorAt(i, col);
+  }
+  m.frustumCulled = false;
+  c.pos = ringPoint(c.a, c.u, c.h, new THREE.Vector3());
+  c.grp = new THREE.Group();
+  c.grp.quaternion.copy(levelQ(c.a, new THREE.Quaternion()));
+  c.grp.add(m);
+  scene.add(c.grp);
+}
+
 function updatePorts() {
+  for (const c of MEGAS) {
+    c.grp.position.copy(c.pos).sub(camPos);
+    c.grp.visible = c.grp.position.length() < 6e5;
+  }
   const t = performance.now() / 1000;
   for (const P of PORTS) {
     P.grp.position.copy(P.pos).sub(camPos);
