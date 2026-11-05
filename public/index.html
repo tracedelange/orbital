@@ -88,7 +88,7 @@
 </div>
 <script type="module">
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Units are metres. Everything lives in the ring's frame; the Y axis is the ring axis and the floor is
 // the inside of a cylinder at radius R. "Height" h is measured toward the axis, so a surface point sits
@@ -1543,6 +1543,14 @@ function toWalk() {
   // Drop straight down below the ship, onto a GSV deck if it's over one; the ship stays parked.
   // On a deck (player.gsv), player.a and player.u are deck x and y instead of ring coordinates.
   mode = 'walk';
+  // On the moon, player.moon is the unit direction from its centre; a and u aren't used.
+  player.moon = shipPos.distanceTo(MOON.c) < MOON.r + 5e4 ? new THREE.Vector3().subVectors(shipPos, MOON.c).normalize() : null;
+  if (player.moon) {
+    player.gsv = null;
+    Object.assign(player, { pitch: 0, z: 0, vz: 0 });
+    updateHud();
+    return;
+  }
   const dk = deckLocal(shipPos);
   player.gsv = dk.on ? dk.g : null;
   if (dk.on) {
@@ -1559,6 +1567,18 @@ function toWalk() {
 function toShip() {
   // Bring the ship to the walker, 20 m up, facing the way they were looking.
   mode = 'ship';
+  if (player.moon) {
+    const d = player.moon;
+    shipPos.copy(MOON.c).addScaledVector(d, MOON.r + moonH(d) + 20);
+    moonFrame(d, east, north);
+    fwd.copy(east).multiplyScalar(Math.cos(player.yaw)).addScaledVector(north, Math.sin(player.yaw));
+    shipQ.setFromRotationMatrix(basis.makeBasis(right.crossVectors(fwd, d), d, fwdP.copy(fwd).negate()));
+    player.moon = null;
+    camQ.copy(shipQ);
+    shipSpeed = 50;
+    updateHud();
+    return;
+  }
   const g = player.gsv;
   if (g) deckPoint(g, player.a, player.u, deckH(g, player.a, player.u) + 20, shipPos);
   else ringPoint(player.a, player.u, Math.max(heightAt(player.a, player.u), 0) + 20, shipPos);
@@ -1590,7 +1610,7 @@ function overview() {
   updateHud();
 }
 
-const east = new THREE.Vector3(), up = new THREE.Vector3(), fwd = new THREE.Vector3(), fwdP = new THREE.Vector3(),
+const east = new THREE.Vector3(), north = new THREE.Vector3(), up = new THREE.Vector3(), fwd = new THREE.Vector3(), fwdP = new THREE.Vector3(),
       upP = new THREE.Vector3(), right = new THREE.Vector3(), basis = new THREE.Matrix4(), dq = new THREE.Quaternion();
 const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
 
@@ -1664,6 +1684,18 @@ function updateShip(dt) {
     const deckAlt = Math.max(dk.h, g) - g + CLEARANCE;
     if (deckAlt < shipAlt) { shipAlt = deckAlt; groundUp.copy(dk.g.UP); }
   }
+  // And above the moon.
+  const mr = moonV.copy(shipPos).sub(MOON.c).length();
+  if (mr < MOON.r + 3e4) {
+    moonV.divideScalar(mr);
+    const g = MOON.r + moonH(moonV) + CLEARANCE;
+    if (mr < g) {
+      shipPos.copy(MOON.c).addScaledVector(moonV, g);
+      if (impact(shipSpeed * Math.max(-fwd.dot(moonV), 0), moonV)) return;
+    }
+    const moonAlt = Math.max(mr, g) - g + CLEARANCE;
+    if (moonAlt < shipAlt) { shipAlt = moonAlt; groundUp.copy(moonV); }
+  }
 
   // Chase camera: lags the ship's turns a little, then sits behind and above it.
   camQ.slerp(shipQ, 1 - Math.exp(-6 * dt));
@@ -1678,7 +1710,10 @@ function updateWalk(dt) {
   // In (east = +a, north = +u): forward is (cy, sy), right is (sy, -cy).
   const stepA = (f * cy + s * sy) * walkSpeed * dt, stepU = (f * sy - s * cy) * walkSpeed * dt;
   const g = player.gsv;
-  if (g) {  // held 10 m inside the deck's edge
+  if (player.moon) {
+    moonFrame(player.moon, east, north);
+    player.moon.addScaledVector(east, stepA / MOON.r).addScaledVector(north, stepU / MOON.r).normalize();
+  } else if (g) {  // held 10 m inside the deck's edge
     player.a = clamp(player.a + stepA, -g.L / 2 + 10, g.L / 2 - 10);
     player.u = clamp(player.u + stepU, -g.W / 2 + 10, g.W / 2 - 10);
   } else {
@@ -1688,22 +1723,28 @@ function updateWalk(dt) {
 
   // Jump launch speed equals walk speed, so scrolling up gives bigger leaps.
   if (keys.has('Space') && player.z === 0) player.vz = walkSpeed;
-  player.vz -= GRAVITY * dt;
+  player.vz -= (player.moon ? MOON.g : GRAVITY) * dt;
   player.z = Math.max(0, player.z + player.vz * dt);
   if (player.z === 0) player.vz = Math.max(0, player.vz);
 
-  if (g) {
+  if (player.moon) {
+    camPos.copy(MOON.c).addScaledVector(player.moon, MOON.r + moonH(player.moon) + EYE + player.z);
+  } else if (g) {
     deckPoint(g, player.a, player.u, deckH(g, player.a, player.u) + EYE + player.z, camPos);
   } else {
     const ground = Math.max(heightAt(player.a, player.u), 0); // walk on the water surface
     ringPoint(player.a, player.u, ground + EYE + player.z, camPos);
   }
-  const th = (g ? g.a : player.a) / R;
-
-  up.set(-Math.cos(th), 0, -Math.sin(th));
-  east.set(-Math.sin(th), 0, Math.cos(th));
-  fwd.copy(east).multiplyScalar(cy);
-  fwd.y = sy;
+  if (player.moon) {
+    up.copy(player.moon);
+    moonFrame(up, east, north);
+  } else {
+    const th = (g ? g.a : player.a) / R;
+    up.set(-Math.cos(th), 0, -Math.sin(th));
+    east.set(-Math.sin(th), 0, Math.cos(th));
+    north.set(0, 1, 0);
+  }
+  fwd.copy(east).multiplyScalar(cy).addScaledVector(north, sy);
   const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
   fwdP.copy(fwd).multiplyScalar(cp).addScaledVector(up, sp);
   upP.copy(up).multiplyScalar(cp).addScaledVector(fwd, -sp);
@@ -2029,6 +2070,129 @@ for (const c of MEGAS) {
   scene.add(c.grp);
 }
 
+// --- Moon ---
+// A cratered moon 300 km in radius, 0.6 R off the axis and 4,000 km past the +y wall. The false sun lights it,
+// and it has day and night with the shade at its azimuth, so it shows phases from the ring. No air, no water.
+// moonH() is the one height function: the meshes, ship collision and walking all use it.
+const MOON = { c: new THREE.Vector3(0.6 * R * Math.cos(0.3), HW + 4e6, 0.6 * R * Math.sin(0.3)), r: 3e5, g: 1.62 };
+const MOON_CRATERS = [[6, 3000, 1], [24, 1200, 2], [96, 300, 3], [384, 60, 4]];   // cells per cube-face edge, depth (m), seed
+function vnoise3(x, y, z, seed) {   // value noise in -1..1
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const sm = t => t * t * (3 - 2 * t), fx = sm(x - ix), fy = sm(y - iy), fz = sm(z - iz);
+  const c = (i, j, k) => tHash(ix + i, tHash(iy + j, iz + k, seed), seed) / 2147483648 - 1;
+  return lerp(lerp(lerp(c(0, 0, 0), c(1, 0, 0), fx), lerp(c(0, 1, 0), c(1, 1, 0), fx), fy),
+              lerp(lerp(c(0, 0, 1), c(1, 0, 1), fx), lerp(c(0, 1, 1), c(1, 1, 1), fx), fy), fz);
+}
+// Height above radius MOON.r along unit direction d. Craters sit in the cells of a cube-face grid at four
+// sizes (a bowl with a raised rim; about 40% of cells hold one), over rolling ground.
+function moonH(d) {
+  const ax = Math.abs(d.x), ay = Math.abs(d.y), az = Math.abs(d.z);
+  let face, u, v;
+  if (ax >= ay && ax >= az) { face = d.x > 0 ? 0 : 1; u = d.y / ax; v = d.z / ax; }
+  else if (ay >= az) { face = d.y > 0 ? 2 : 3; u = d.x / ay; v = d.z / ay; }
+  else { face = d.z > 0 ? 4 : 5; u = d.x / az; v = d.y / az; }
+  let h = 900 * vnoise3(d.x * 8, d.y * 8, d.z * 8, 1) + 250 * vnoise3(d.x * 40, d.y * 40, d.z * 40, 2) + 40 * vnoise3(d.x * 300, d.y * 300, d.z * 300, 3);
+  for (const [n, depth, seed] of MOON_CRATERS) {
+    const cu = (u + 1) / 2 * n, cv = (v + 1) / 2 * n, i0 = Math.floor(cu), j0 = Math.floor(cv);
+    for (let i = i0 - 1; i <= i0 + 1; i++) for (let j = j0 - 1; j <= j0 + 1; j++) {
+      const hs = tHash(i + face * 4096, j, 6000 + seed);
+      if ((hs & 255) > 100) continue;
+      const rc = 0.2 + 0.25 * ((hs >>> 8) & 255) / 255;   // radius, in cells
+      const q = Math.hypot(cu - i - 0.2 - 0.6 * ((hs >>> 16) & 255) / 255, cv - j - 0.2 - 0.6 * ((hs >>> 24) & 255) / 255) / rc;
+      h += depth * (q < 1 ? q * q - 0.8 : 0.2 * Math.exp(-(((q - 1) / 0.3) ** 2)));
+    }
+  }
+  return h;
+}
+// Moon materials: lit by the sun like everything else, but its day factor is the moon's own (uMoonDay).
+// The whole-moon mesh sinks 3 km inside uSink's cone (the detailed patch under the camera) so the two don't fight.
+const moonDay = { value: 1 }, moonSink = { value: new THREE.Vector4(0, 0, 0, 2) };   // xyz: patch direction, w: cos of its angular radius
+function moonMat(sink) {
+  const m = new THREE.MeshStandardMaterial({ color: 0x9c9890, roughness: 1, flatShading: true });
+  m.onBeforeCompile = sh => {
+    patchDay(sh, 'local');
+    sh.uniforms.uMoonDay = moonDay;
+    sh.uniforms.uSink = moonSink;
+    sh.vertexShader = 'uniform float uMoonDay;\nuniform vec4 uSink;\n' + sh.vertexShader.replace('vDay = uLocalDay;', 'vDay = uMoonDay;' +
+      (sink ? `\nif (dot(normalize(transformed), uSink.xyz) > uSink.w) transformed *= ${(1 - 3000 / MOON.r).toFixed(6)};` : ''));
+  };
+  return m;
+}
+const moonGeo = (() => {
+  const g = new THREE.IcosahedronGeometry(1, 80);   // ~4 km triangles
+  g.deleteAttribute('normal'); g.deleteAttribute('uv');
+  const m = mergeVertices(g), p = m.attributes.position, d = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    d.fromBufferAttribute(p, i).normalize();
+    d.multiplyScalar(MOON.r + moonH(d));
+    p.setXYZ(i, d.x, d.y, d.z);
+  }
+  return m;
+})();
+const moonMesh = new THREE.Mesh(moonGeo, moonMat(true));
+moonMesh.frustumCulled = false;
+scene.add(moonMesh);
+// Detailed patch: 20 km square, 125 m spacing, centred under the camera within 60 km of the surface, rebuilt
+// when the camera has moved 3 km along the surface. Vertices are relative to the patch centre (patchC).
+const PATCH_N = 161, PATCH_HALF = 10000;
+const patchGeo = new THREE.BufferGeometry();
+{
+  const idx = [];
+  for (let i = 0; i < PATCH_N - 1; i++) for (let j = 0; j < PATCH_N - 1; j++) {
+    const a = i * PATCH_N + j, b = a + PATCH_N;
+    idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  patchGeo.setIndex(idx);
+  patchGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PATCH_N * PATCH_N * 3), 3));
+}
+const moonPatch = new THREE.Mesh(patchGeo, moonMat(false));
+moonPatch.frustumCulled = false;
+moonPatch.visible = false;
+scene.add(moonPatch);
+const patchC = new THREE.Vector3(), patchDir = new THREE.Vector3(), moonV = new THREE.Vector3(), pe1 = new THREE.Vector3(), pe2 = new THREE.Vector3(), pd = new THREE.Vector3();
+function buildPatch(d0) {
+  patchDir.copy(d0);
+  pe1.set(0, 1, 0).cross(d0);
+  if (pe1.lengthSq() < 1e-6) pe1.set(1, 0, 0).cross(d0);
+  pe1.normalize(); pe2.crossVectors(d0, pe1);
+  const r0 = MOON.r + moonH(d0), arr = patchGeo.attributes.position.array;
+  patchC.copy(MOON.c).addScaledVector(d0, r0);
+  for (let i = 0; i < PATCH_N; i++) for (let j = 0; j < PATCH_N; j++) {
+    const x = -PATCH_HALF + 2 * PATCH_HALF * i / (PATCH_N - 1), y = -PATCH_HALF + 2 * PATCH_HALF * j / (PATCH_N - 1);
+    pd.copy(d0).multiplyScalar(MOON.r).addScaledVector(pe1, x).addScaledVector(pe2, y).normalize();
+    const r = MOON.r + moonH(pd), k = (i * PATCH_N + j) * 3;
+    arr[k] = pd.x * r - d0.x * r0; arr[k + 1] = pd.y * r - d0.y * r0; arr[k + 2] = pd.z * r - d0.z * r0;
+  }
+  patchGeo.attributes.position.needsUpdate = true;
+  moonSink.value.set(d0.x, d0.y, d0.z, Math.cos(0.8 * PATCH_HALF / MOON.r));
+  moonPatch.visible = true;
+}
+const moonLabel = document.createElement('div');
+moonLabel.className = 'peer';
+document.body.append(moonLabel);
+function updateMoon() {
+  moonDay.value = dayFactor(Math.atan2(MOON.c.z, MOON.c.x));
+  moonMesh.position.copy(MOON.c).sub(camPos);
+  const dist = moonMesh.position.length();
+  if (dist < MOON.r + 6e4) {
+    moonV.copy(camPos).sub(MOON.c).divideScalar(dist);
+    if (!moonPatch.visible || moonV.angleTo(patchDir) * MOON.r > 3000) buildPatch(moonV);
+    moonPatch.position.copy(patchC).sub(camPos);
+  } else if (moonPatch.visible) {
+    moonPatch.visible = false;
+    moonSink.value.w = 2;   // nothing sinks
+  }
+  if (dist > 2 * MOON.r) placeLabel(moonLabel, moonV.copy(MOON.c).sub(camPos), '');
+  else moonLabel.style.display = 'none';
+}
+// Moon surface frame at unit direction d: east and north along the surface, like the ring's (east × north = up).
+function moonFrame(d, e, n) {
+  n.set(0, 1, 0).addScaledVector(d, -d.y);
+  if (n.lengthSq() < 1e-6) n.set(1, 0, 0).addScaledVector(d, -d.x);
+  n.normalize();
+  e.crossVectors(n, d);
+}
+
 // Unnamed markers over the super cities (above the skyline) and the peaks (at the summit), within 2,000 km.
 for (const L of [...MEGAS, ...PEAKS]) {
   L.mark = ringPoint(L.a, L.u, MEGAS.includes(L) ? L.h + 1600 : heightAt(L.a, L.u), new THREE.Vector3());
@@ -2249,8 +2413,11 @@ chatIn.addEventListener('keydown', e => {
 
 function goTo(p) {
   const { s, w } = p.snaps[p.snaps.length - 1];
-  if (w) {  // on foot: bring the ship down beside them, on the ring or a GSV deck
-    const dk = deckLocal(pv.fromArray(w));
+  if (w) {  // on foot: bring the ship down beside them, on the ring, a GSV deck or the moon
+    pv.fromArray(w);
+    player.yaw = 0;
+    if (pv.distanceTo(MOON.c) < MOON.r + 5e4) { player.moon = pv.sub(MOON.c).normalize().clone(); toShip(); return; }
+    const dk = deckLocal(pv);
     player.gsv = dk.on ? dk.g : null;
     player.a = dk.on ? dk.x : wrapA(Math.atan2(w[2], w[0]) * R);
     player.u = dk.on ? dk.y : clamp(w[1], -HW + 10, HW - 10);
@@ -2330,6 +2497,7 @@ renderer.setAnimationLoop(() => {
   updateTiles();
   updateGsv();
   updatePorts();
+  updateMoon();
   updateTowns();
   updateShrubs();
   updateBuildings();
@@ -2350,7 +2518,8 @@ renderer.setAnimationLoop(() => {
     }
     const qLabel = Object.keys(QUALITY).find(k => QUALITY[k] === Q);
     fpsEl.textContent = `${Math.round(fps)} fps · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris · res ${res.toFixed(2)}× · ${qLabel}${autoPickAt < Infinity ? ' (testing)' : ''}`;
-    const p = mode === 'walk' ? camPos : shipPos, alt = R - Math.hypot(p.x, p.z);
+    const p = mode === 'walk' ? camPos : shipPos, md = p.distanceTo(MOON.c);
+    const alt = md < 2 * MOON.r ? md - MOON.r - moonH(moonV.copy(p).sub(MOON.c).divideScalar(md)) : R - Math.hypot(p.x, p.z);
     const altText = alt < 1e4 ? alt.toFixed(0) + ' m' : (alt / 1000).toFixed(0) + ' km';
     const capped = keys.has('KeyW') && speedCap() < SHIP_MAX && shipSpeed > 0.97 * speedCap();   // throttling into the height limit
     flightEl.innerHTML = (mode === 'ship' ? `<b>${fmtSpeed(shipSpeed)}</b>${capped ? ' <span>· climb to go faster</span>' : ''}<br>` : '') + `<span>altitude</span> ${altText}`;

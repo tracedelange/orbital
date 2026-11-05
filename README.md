@@ -83,6 +83,8 @@ You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
 The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 400 km east of the first GSV), two super cities with skylines of towers up to 1.5 km, and seven straits where the land strip gives way to sea and islands. A ◆ marker with the distance shows each peak and super city within 2,000 km.
 
+A moon, 300 km in radius, hangs about 6,000 km past one wall, and its ◆ marker shows from anywhere. Fly there; above the ring the speed limit lifts. It has day and night with the shade, so it shows phases from the ring. You can land on it and walk (V), where the gravity is 1.62 m/s², so jumps go about six times higher.
+
 ## Notes for an agent
 
 - Units are metres. The ring axis is Y, and the floor is the inside of a cylinder at radius `R = 1e7`.
@@ -95,4 +97,5 @@ The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 40
 - Server messages: `hello {id, epoch, room, others}`, `full`, `name-ok {name}`, `name-bad {reason}`, `pose {id, name, s, w}`, `chat {id, name, text}` and `leave {id}`. Client messages: `name {name}`, `pose {s, w}` and `chat {text}`. The relay sends nothing from a client until that client has a name. `s` is the ship position and quaternion (7 numbers). `w` is the eye position of a walker, or `null`.
 - The relay sends `epoch` 0. All clients calculate the day angle from the clock, so all players see the same time of day. The client wraps the angle to one turn, because the shader uniform is a 32-bit float.
 - Do not set `run_worker_first` in `wrangler.toml`. With it, each page load counts as a billed request.
+- The moon is `MOON` (centre, radius, gravity). `moonH()` gives its height for the meshes, ship collision and walking. A coarse whole-moon mesh is built once; a 20 km detail patch rebuilds under the camera within 60 km of the surface, and the coarse mesh sinks 3 km under it. On the moon, `player.moon` is the walker's unit direction from the centre.
 - To test in headless Chrome, use `--use-angle=swiftshader --enable-unsafe-swiftshader`. Use `--timeout=15000` for screenshots. `--virtual-time-budget` renders about one frame, so the scene does not move.
