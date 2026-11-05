@@ -19,11 +19,22 @@
   #flight { display: inline-block; vertical-align: top; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; }
   #flight b { color: #fff; font-size: 15px; }
   #flight span { color: #8fa0b8; }
-  #gear { vertical-align: top; font: 15px/1 sans-serif; color: #cfd8e6; background: rgba(0,0,0,0.45); border: 0; border-radius: 6px; padding: 8px 9px; cursor: pointer; }
-  #more { width: 240px; margin-top: 6px; text-align: left; background: rgba(0,0,0,0.45); padding: 10px 14px; border-radius: 6px; }
-  #more input { width: 100%; }
-  #more select { font: inherit; margin-left: 6px; }
-  #more[hidden], #landing[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
+  #menu[hidden], #landing[hidden], #net:empty { display: none; }   /* the id's display rule would beat [hidden] */
+  /* Esc menu: opens whenever the mouse is free (outside chat and the landing card). */
+  #menu { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box;
+    background: rgba(2,3,10,0.55); color: #e6edf6; font: 13px/1.5 ui-monospace, Menlo, monospace; }
+  #menu .card { width: min(340px, 100%); display: flex; flex-direction: column; gap: 10px; background: rgba(11,15,24,0.92); padding: 18px 20px; border-radius: 8px; }
+  #menu h2 { margin: 0; font: 600 18px ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.1em; text-transform: uppercase; }
+  #menu h3 { margin: 6px 0 0; font-size: 11px; color: #8fa0b8; text-transform: uppercase; letter-spacing: 0.1em; }
+  #menu input, #menu button, #menu select { font: inherit; padding: 6px 8px; border-radius: 4px; border: 1px solid #4a5568; background: #0b0f18; color: #fff; }
+  #menu button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
+  #menu .row { display: flex; gap: 8px; }
+  #menu .row input { flex: 1; min-width: 0; }
+  #menu label { display: flex; align-items: center; gap: 8px; }
+  #menu input[type=range] { flex: 1; padding: 0; }
+  #menu #fps, #menu #stats { color: #8fa0b8; font-size: 11px; }
+  #menuMsg { font-size: 12px; color: #ffb4a8; }
+  #menuMsg:empty { display: none; }
   #landing {
     position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 16px; padding: 16px; box-sizing: border-box; text-align: center; color: #e6edf6; font: 14px/1.5 ui-monospace, Menlo, monospace;
@@ -34,15 +45,16 @@
   #landing .keys { font-size: 12px; color: #8fa0b8; }
   #landing .keys b { color: #cfd8e6; }
   body:has(#landing:not([hidden])) :is(#hud, #perf, #net, #chat) { display: none; }
+  #net .who { color: #8fa0b8; }
   #net {
     position: fixed; left: 16px; top: 16px; color: #cfd8e6;
     font: 12px/1.6 ui-monospace, Menlo, monospace; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px;
   }
   #landing .row { display: flex; gap: 8px; }
   #joinMsg { color: #ffb4a8; font-size: 12px; }
-  #swatches { display: flex; gap: 8px; }
-  #landing #swatches button { width: 24px; height: 24px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
-  #landing #swatches button.on { border-color: #fff; }
+  .swatches { display: flex; gap: 8px; }
+  body .swatches button { width: 24px; height: 24px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+  body .swatches button.on { border-color: #fff; }
   #joinMsg:empty { display: none; }
   #chat {
     position: fixed; left: 16px; bottom: 96px; width: min(420px, calc(100vw - 32px)); color: #e6edf6;
@@ -54,7 +66,7 @@
   #chatIn { width: 100%; box-sizing: border-box; margin-top: 6px; font: inherit; padding: 6px 8px; border-radius: 4px; border: 1px solid #4a5568; background: rgba(11,15,24,0.85); color: #fff; }
   #landing input, #landing button { font: inherit; padding: 8px 10px; border-radius: 4px; border: 1px solid #4a5568; background: #0b0f18; color: #fff; }
   #landing button { background: #2b6cb0; border-color: #2b6cb0; cursor: pointer; }
-  /* N cycles the HUD: 3 everything, 2 player labels only, 1 nothing but chat (the gear comes back with N). */
+  /* N cycles the HUD: 3 everything, 2 player labels only, 1 nothing but chat. */
   body[data-hud="2"] .poi, body[data-hud="1"] .peer { visibility: hidden; }
   body[data-hud="1"] :is(#hud, #perf, #net) { display: none; }
   .peer {
@@ -76,20 +88,25 @@
   <h1>Culture Orbital</h1>
   <p>A ring world 20,000 km across, in the spirit of Iain M. Banks's Culture. Fly it, walk it, and meet whoever else is here.</p>
   <div class="row"><input id="joinName" maxlength="20" placeholder="Your name" autocomplete="off" autofocus><button>Fly</button></div>
-  <div id="swatches"></div>
+  <div class="swatches"></div>
   <div id="joinMsg"></div>
-  <p class="keys"><b>Mouse</b> steer · <b>W/S</b> throttle · <b>A/D</b> roll · hold <b>Space</b> look around · <b>V</b> walk · <b>Enter</b> chat</p>
+  <p class="keys"><b>Mouse</b> steer · <b>W/S</b> throttle · <b>A/D</b> roll · hold <b>Space</b> look around · <b>V</b> land · <b>Enter</b> chat</p>
 </form>
 <div id="chat"><div id="chatLog"></div><input id="chatIn" maxlength="200" placeholder="Say something · Enter sends · Esc closes" autocomplete="off" hidden></div>
-<div id="perf">
-  <div id="flight"></div>
-  <button id="gear" title="Settings">⚙</button>
-  <div id="more" hidden>
-  <div id="fps">– fps</div>
-  <div id="stats"></div>
-  <label>Quality<select id="quality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><br>
-  <label>LOD detail <span id="lodLabel"></span></label>
-  <input id="lod" type="range" min="1" max="4" step="0.5" value="2">
+<div id="perf"><div id="flight"></div></div>
+<div id="menu" hidden>
+  <div class="card">
+    <h2>Menu</h2>
+    <button id="resume">Resume</button>
+    <h3>You</h3>
+    <div class="row" id="renameRow"><input id="menuName" maxlength="20" placeholder="Your name" autocomplete="off"><button id="rename">Rename</button></div>
+    <div id="menuMsg"></div>
+    <div class="swatches"></div>
+    <h3>Display</h3>
+    <label>Quality <select id="quality"><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+    <label>LOD detail <span id="lodLabel"></span><input id="lod" type="range" min="1" max="4" step="0.25" value="2"></label>
+    <div id="fps">– fps</div>
+    <div id="stats"></div>
   </div>
 </div>
 <script type="module">
@@ -112,7 +129,7 @@ const DAY_RATE = 2 * Math.PI / 1800;    // the shade turns once every 30 minutes
 // Landmarks. Positions are arc length a and across-ring u, in metres.
 // Super cities sit on flattened ground. PEAKS are single mountains well above the 8 km ranges; STRAITS are
 // where the land strip gives way to sea and islands (all sea within w of the centre, all land beyond 2w).
-const MEGAS = [{ a: 0.15 * R, u: 3e4, r: 12000 }, { a: 3.2 * R, u: -2e4, r: 12000 }];
+const MEGAS = [{ a: 0.15 * R, u: 3e4, r: 36000, name: 'Ossuen' }, { a: 3.2 * R, u: -2e4, r: 36000, name: 'Telmarra' }];
 const PEAKS = [{ a: 4e5, u: -6e4, r: 9e4, h: 22000 }], STRAITS = [];   // the first peak is 400 km east of the first GSV
 {
   // The rest come from a fixed seed, so every player gets the same ring. Each keeps 0.06 rad (600 km) clear of
@@ -831,7 +848,7 @@ for (const c of MEGAS) Object.assign(c, { h: heightAt(c.a, c.u), tier: 0 });
 // and ring roads at 0.35 and 0.7 of the way to the edge, all 120 m wide. Zones by q, the share of the way to the edge: 0 core
 // (< 0.15), 1 inner (< 0.35), 2 mid (< 0.7), 3 outer. About one district in four between the roads is a park.
 // The terrain shader paints the same roads (see vMega).
-const MEGA_ROAD = 60;   // half width
+const MEGA_ROAD = 90;   // half width
 function megaPlan(c, x, y) {
   // The ring roads follow the city's wobbly outline (townShape), so the plan doesn't read as a target from above.
   const d = Math.hypot(x, y), ang = Math.atan2(y, x), e = c.r * townShape(c.r, x, y), q = d / e, w = Math.PI / 4;
@@ -839,7 +856,7 @@ function megaPlan(c, x, y) {
   const road = (d > 0.12 * c.r && spoke < MEGA_ROAD) || Math.abs(d - 0.35 * e) < MEGA_ROAD || Math.abs(d - 0.7 * e) < MEGA_ROAD;
   const ring = q < 0.35 ? 0 : q < 0.7 ? 1 : 2, sector = Math.floor((ang + Math.PI) / w);
   const park = q > 0.15 && (tHash(ring, sector, 4100 + (c.a | 0)) & 7) < 2;
-  return { road, park, zone: q < 0.15 ? 0 : q < 0.35 ? 1 : q < 0.7 ? 2 : 3 };
+  return { road, park, zone: q < 0.15 ? 0 : q < 0.35 ? 1 : q < 0.7 ? 2 : 3, district: ring * 8 + sector };
 }
 // Settlements of every tier within each tier's range of (a, u), or within `range` if given.
 function settlementsNear(a, u, range) {
@@ -1112,7 +1129,7 @@ const ship = new THREE.Group();
 // A sleek fighter: slim lathed fuselage, swept delta wing, canopy, twin nacelles with canted fins, and a
 // drive glow at the back of each nacelle (both live in the 'glow' group, which the speed effects stretch).
 // Nose toward -Z, like a camera.
-const GLOW_Z = 6.3, TIP_X = 5.2, TIP_Z = 4.4;
+const GLOW_Z = 6.3, TIP_X = 5.2, TIP_Z = 4.4, GEAR_H = 2.1;   // GEAR_H: ship centre above the ground when landed
 // Hull colours to pick from on the landing card. Poses carry the index, so other players see it too.
 const SHIP_COLORS = [0xd9dde4, 0x3a3f48, 0xc8453c, 0xe08a2e, 0xe2c94a, 0x4f9e5a, 0x3d6fc4, 0x8a5cc4];
 let shipColor = 0;
@@ -1145,8 +1162,26 @@ const hullMat = withDay(new THREE.MeshStandardMaterial({ color: SHIP_COLORS[ship
     ship.add(nacelle, fin);
   }
   ship.add(glow);
+  // Landing gear: a nose leg and two under the nacelles, each reaching GEAR_H below the ship's centre.
+  // setGear() scales them out of the hull (0 = stowed, 1 = down).
+  const gear = new THREE.Group();
+  gear.name = 'gear';
+  for (const [x, y, z] of [[0, -0.6, -4], [-1.6, -0.6, 3], [1.6, -0.6, 3]]) {
+    const len = GEAR_H + y, leg = new THREE.Group();
+    leg.position.set(x, y, z);
+    leg.add(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, len, 6).translate(0, -len / 2, 0), darkMat),
+            new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.08, 10).translate(0, -len, 0), darkMat));
+    gear.add(leg);
+  }
+  gear.visible = false;
+  ship.add(gear);
 }
 scene.add(ship);
+const shipGear = ship.getObjectByName('gear');
+function setGear(k) {
+  shipGear.visible = k > 0.01;
+  for (const leg of shipGear.children) leg.scale.y = Math.max(k, 0.01);
+}
 // Headlight: kept off the ship group so peer ships (ship.clone()) don't each add a light. L toggles it.
 // No inverse-square falloff (decay 0); it fades out smoothly by 2 km.
 const headlight = new THREE.SpotLight(0xf2f6ff, 3, 2000, 0.35, 0.5, 0);
@@ -1230,7 +1265,7 @@ const groundUp = new THREE.Vector3();       // up at the surface under the ship,
 // Above the cap, speed bleeds off over about a second.
 const speedCap = () => Math.min(SHIP_MAX, 50 + Q.speedK * shipAlt);
 
-let mode = 'ship', walkSpeed = 5, spinning = true, muted = false;
+let mode = 'ship', walkSpeed = 5, muted = false;
 const player = { a: 0, u: 0, yaw: 0, pitch: 0, z: 0, vz: 0, gsv: null }; // z: height above ground while jumping; gsv: the GSV whose deck they're on
 const keys = new Set();
 
@@ -1591,6 +1626,7 @@ function updateGsv() {
 }
 
 function spawn() {
+  auto = null; setGear(0);
   // In the ship, 300 m up, 60 km west of a GSV and facing it. The GSV is one in good light (within
   // 1 rad of noon) with the most daylight left; the GSVs are 72° apart, so one always qualifies.
   // Noon is at azimuth uDayAngle, and it moves toward larger azimuths.
@@ -1605,59 +1641,173 @@ function spawn() {
   updateHud();
 }
 
-function toWalk() {
-  // Drop straight down below the ship, onto a GSV deck if it's over one; the ship stays parked.
+function toWalk(p = shipPos) {
+  // Drop straight down below p (the ship, unless given), onto a GSV deck if it's over one; the ship stays parked.
   // On a deck (player.gsv), player.a and player.u are deck x and y instead of ring coordinates.
   mode = 'walk';
   // On the moon, player.moon is the unit direction from its centre; a and u aren't used.
-  player.moon = shipPos.distanceTo(MOON.c) < MOON.r + 5e4 ? new THREE.Vector3().subVectors(shipPos, MOON.c).normalize() : null;
+  player.moon = p.distanceTo(MOON.c) < MOON.r + 5e4 ? new THREE.Vector3().subVectors(p, MOON.c).normalize() : null;
   if (player.moon) {
     player.gsv = null;
     Object.assign(player, { pitch: 0, z: 0, vz: 0 });
     updateHud();
     return;
   }
-  const dk = deckLocal(shipPos);
+  const dk = deckLocal(p);
   player.gsv = dk.on ? dk.g : null;
   if (dk.on) {
     player.a = clamp(dk.x, -dk.g.L / 2 + 10, dk.g.L / 2 - 10);
     player.u = clamp(dk.y, -dk.g.W / 2 + 10, dk.g.W / 2 - 10);
   } else {
-    player.a = wrapA(Math.atan2(shipPos.z, shipPos.x) * R);
-    player.u = clamp(shipPos.y, -HW + 10, HW - 10);
+    player.a = wrapA(Math.atan2(p.z, p.x) * R);
+    player.u = clamp(p.y, -HW + 10, HW - 10);
   }
   Object.assign(player, { pitch: 0, z: 0, vz: 0 });
   updateHud();
 }
 
 function toShip() {
-  // Bring the ship to the walker, 20 m up, facing the way they were looking.
+  // Get in: the landed ship if it's within 100 m, else it comes down beside you. Then it lifts off.
+  blendCam();
+  const near = shipGear.visible && shipPos.distanceTo(camPos) < 100;
   mode = 'ship';
-  if (player.moon) {
-    const d = player.moon;
-    shipPos.copy(MOON.c).addScaledVector(d, MOON.r + moonH(d) + 20);
-    moonFrame(d, east, north);
-    fwd.copy(east).multiplyScalar(Math.cos(player.yaw)).addScaledVector(north, Math.sin(player.yaw));
-    shipQ.setFromRotationMatrix(basis.makeBasis(right.crossVectors(fwd, d), d, fwdP.copy(fwd).negate()));
-    player.moon = null;
-    camQ.copy(shipQ);
-    shipSpeed = 50;
-    updateHud();
-    return;
+  if (!near) {
+    const d = player.moon, g = player.gsv;
+    if (d) shipPos.copy(MOON.c).addScaledVector(d, MOON.r + moonH(d) + GEAR_H);
+    else if (g) deckPoint(g, player.a, player.u, deckH(g, player.a, player.u) + GEAR_H, shipPos);
+    else ringPoint(player.a, player.u, Math.max(heightAt(player.a, player.u), 0) + GEAR_H, shipPos);
+    walkFrame();
+    levelOn(up, fwd.copy(east).multiplyScalar(Math.cos(player.yaw)).addScaledVector(north, Math.sin(player.yaw)), shipQ);
   }
-  const g = player.gsv;
-  if (g) deckPoint(g, player.a, player.u, deckH(g, player.a, player.u) + 20, shipPos);
-  else ringPoint(player.a, player.u, Math.max(heightAt(player.a, player.u), 0) + 20, shipPos);
-  levelQ(g ? g.a : player.a, shipQ).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw));
+  player.moon = null;
   camQ.copy(shipQ);
-  shipSpeed = 50;
+  shipSpeed = 0;
+  const g0 = new THREE.Vector3(), u0 = new THREE.Vector3();
+  surfaceAt(shipPos, g0, u0);
+  auto = { kind: 'lift', t: 0, T: 2.2, start: shipPos.clone(), up: u0, ground: g0 };
+  setGear(1);
+  kickPuffs(g0, u0);
   updateHud();
+}
+
+// V in the ship: it flies itself down to the ground (or a deck, or the moon) a little ahead, levels out,
+// puts its legs down and settles, kicking up dust. Then you step out beside it. V on foot: get in, lift off.
+let auto = null;   // {kind: 'land' | 'lift', t, T, start, target, up, ground, q0, q1}
+let camBlend = null;   // {t, pos, q}: the camera eases from here to wherever the new mode puts it
+const blendCam = () => { camBlend = { t: 0, pos: camPos.clone(), q: camera.quaternion.clone() }; };
+// The surface point under p and its up direction; false in open space.
+function surfaceAt(p, out, upOut) {
+  const md = p.distanceTo(MOON.c);
+  if (md < MOON.r + 5e4) {
+    upOut.subVectors(p, MOON.c).divideScalar(md);
+    out.copy(MOON.c).addScaledVector(upOut, MOON.r + moonH(upOut));
+    return true;
+  }
+  const dk = deckLocal(p);
+  if (dk.on) { upOut.copy(dk.g.UP); deckPoint(dk.g, dk.x, dk.y, deckH(dk.g, dk.x, dk.y), out); return true; }
+  const r = Math.hypot(p.x, p.z);
+  if (r > R + 1000 || Math.abs(p.y) > HW) return false;
+  const a = wrapA(Math.atan2(p.z, p.x) * R), u = clamp(p.y, -HW + 10, HW - 10);
+  ringPoint(a, u, Math.max(heightAt(a, u), 0), out);
+  upOut.set(-p.x / r, 0, -p.z / r);
+  return true;
+}
+// A level attitude on a surface with this up, nose along fwdHint as far as it can.
+function levelOn(upV, fwdHint, out) {
+  fwdP.copy(fwdHint).projectOnPlane(upV);
+  if (fwdP.lengthSq() < 1e-6) fwdP.set(0, 1, 0).applyQuaternion(shipQ).projectOnPlane(upV);   // nose straight down: use the belly's heading
+  fwdP.normalize();
+  right.crossVectors(fwdP, upV);
+  return out.setFromRotationMatrix(basis.makeBasis(right, upV, fwdP.negate()));
+}
+function startLanding() {
+  fwd.set(0, 0, -1).applyQuaternion(shipQ);
+  const target = new THREE.Vector3(), u0 = new THREE.Vector3();
+  if (!surfaceAt(pv.copy(shipPos).addScaledVector(fwd, Math.min(shipSpeed * 1.5, 300)), target, u0)) return toWalk();   // open space
+  const ground = target.clone();
+  target.addScaledVector(u0, GEAR_H);
+  const alt = Math.max(pv.copy(shipPos).sub(target).dot(u0), 10);
+  auto = { kind: 'land', t: 0, T: clamp(1.5 + 1.2 * Math.log10(alt), 3, 9), start: shipPos.clone(), target, up: u0, ground,
+           q0: shipQ.clone(), q1: levelOn(u0, fwd, new THREE.Quaternion()), dust: false };
+}
+const autoD = new THREE.Vector3(), autoV = new THREE.Vector3(), autoPrev = new THREE.Vector3();
+function updateAuto(dt) {
+  const A = auto, s = Math.min((A.t += dt) / A.T, 1);
+  autoPrev.copy(shipPos);
+  if (A.kind === 'land') {
+    // Glide across with an S-curve; come down fast at first, then slow for the touchdown.
+    autoD.subVectors(A.target, A.start);
+    autoV.copy(A.up).multiplyScalar(autoD.dot(A.up));
+    autoD.sub(autoV);
+    shipPos.copy(A.start).addScaledVector(autoD, smoothstep(s, 0, 1)).addScaledVector(autoV, 1 - (1 - s) ** 3);
+    shipQ.slerpQuaternions(A.q0, A.q1, smoothstep(s, 0, 0.7));
+    setGear(smoothstep(s, 0.55, 0.85));
+    if (!A.dust && autoV.subVectors(shipPos, A.ground).dot(A.up) < 30) { A.dust = true; kickPuffs(A.ground, A.up); }
+  } else {
+    shipPos.copy(A.start).addScaledVector(A.up, 25 * smoothstep(s, 0, 1));
+    setGear(1 - smoothstep(s, 0, 0.5));
+  }
+  shipSpeed = shipPos.distanceTo(autoPrev) / Math.max(dt, 1e-3);
+  shipAlt = Math.max(autoV.subVectors(shipPos, A.ground).dot(A.up), 0);   // centre to ground, as updateShip measures it
+  groundUp.copy(A.up);
+  chaseCam(dt);
+  if (s < 1) return;
+  auto = null;
+  if (A.kind === 'lift') { shipSpeed = 30; return; }
+  // Step out on the right, facing the way the ship points.
+  shipSpeed = 0;
+  blendCam();
+  toWalk(pv.set(10, 0, 0).applyQuaternion(shipQ).add(shipPos));
+  walkFrame();
+  fwd.set(0, 0, -1).applyQuaternion(shipQ);
+  player.yaw = Math.atan2(fwd.dot(north), fwd.dot(east));
+}
+
+// Dust kicked up by the drive: a ring of soft puffs that spread out along the ground and fade.
+const PUFF_N = 40, puffs = [], puffAt = { t: 9, pos: new THREE.Vector3(), up: new THREE.Vector3(), e1: new THREE.Vector3(), e2: new THREE.Vector3() };
+{
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const cx = cv.getContext('2d'), gr = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,0.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  cx.fillStyle = gr; cx.fillRect(0, 0, 64, 64);
+  const map = new THREE.CanvasTexture(cv);
+  for (let i = 0; i < PUFF_N; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false, opacity: 0 }));
+    sp.visible = false;
+    puffs.push(sp);
+    scene.add(sp);
+  }
+}
+function kickPuffs(pos, upV) {
+  puffAt.t = 0;
+  puffAt.pos.copy(pos);
+  puffAt.up.copy(upV);
+  puffAt.e1.set(1, 0, 0).projectOnPlane(upV);
+  if (puffAt.e1.lengthSq() < 1e-6) puffAt.e1.set(0, 0, 1).projectOnPlane(upV);
+  puffAt.e1.normalize();
+  puffAt.e2.crossVectors(upV, puffAt.e1);
+  const tint = pos.distanceTo(MOON.c) < 2 * MOON.r ? 0x9a9a9a : 0xb8a888;
+  for (const sp of puffs) sp.material.color.setHex(tint);
+}
+function updatePuffs(dt) {
+  const k = puffAt.t += dt, light = Math.max(dayUniforms.uLocalDay.value, 0.2);
+  for (let i = 0; i < PUFF_N; i++) {
+    const sp = puffs[i], age = k - (i % 4) * 0.15;   // four waves
+    sp.visible = age > 0 && age < 2.5;
+    if (!sp.visible) continue;
+    const th = i * 2.4, out = 3 + (6 + (i % 7)) * age;
+    sp.position.copy(puffAt.pos).addScaledVector(puffAt.e1, Math.cos(th) * out).addScaledVector(puffAt.e2, Math.sin(th) * out)
+      .addScaledVector(puffAt.up, 0.6 + 1.2 * age).sub(camPos);
+    sp.scale.setScalar(3 + 6 * age);
+    sp.material.opacity = 0.45 * (1 - age / 2.5) * light;
+  }
 }
 
 // O shows the whole ring from 20,000 km out; O again goes back to where you were, if you haven't flown off.
 let beforeOverview = null;
 const OVERVIEW_POS = new THREE.Vector3(0, 0.9 * R, 2.2 * R);
 function overview() {
+  auto = null; setGear(0);
   if (beforeOverview && shipPos.distanceTo(OVERVIEW_POS) < 1e5) {
     const b = beforeOverview;
     beforeOverview = null;
@@ -1695,14 +1845,15 @@ scene.add(shadow);
 const shadowFwd = new THREE.Vector3(), shadowRight = new THREE.Vector3(), shadowBasis = new THREE.Matrix4();
 function updateShadow() {
   const fade = (1 - smoothstep(shipAlt, 30, 1500)) * dayUniforms.uLocalDay.value;
-  shadow.visible = ship.visible && fade > 0.01;
+  shadow.visible = ship.visible && fade > 0.01 && shipAlt > GEAR_H + 0.5;   // none once it's down on its legs
   if (!shadow.visible) return;
   shadowFwd.set(0, 0, -1).applyQuaternion(shipQ).projectOnPlane(groundUp).normalize();
   shadowRight.crossVectors(shadowFwd, groundUp);
   shadow.quaternion.setFromRotationMatrix(shadowBasis.makeBasis(shadowRight, shadowFwd, groundUp));
   const blur = 1 + shipAlt / 300;   // a wider, softer edge from higher up
   shadow.scale.set(2 * TIP_X * 1.3 * blur, 14 * blur, 1);
-  shadow.position.copy(shipPos).addScaledVector(groundUp, 1.5 - shipAlt).sub(camPos);   // 1.5 m up, clear of the terrain
+  // Up to 1.5 m over the ground, clear of the terrain; lower near the ground so it stays under a landed ship's belly.
+  shadow.position.copy(shipPos).addScaledVector(groundUp, Math.min(1.5, 0.3 + 0.1 * shipAlt) - shipAlt).sub(camPos);
   shadow.material.opacity = 0.5 * fade / blur;
 }
 
@@ -1763,8 +1914,11 @@ function updateShip(dt) {
     if (moonAlt < shipAlt) { shipAlt = moonAlt; groundUp.copy(moonV); }
   }
 
-  // Chase camera: lags the ship's turns a little, then sits behind and above it.
-  // Free look (Space held) turns it around the ship; on release it swings back behind.
+  chaseCam(dt);
+}
+// Chase camera: lags the ship's turns a little, then sits behind and above it.
+// Free look (Space held) turns it around the ship; on release it swings back behind.
+function chaseCam(dt) {
   camQ.slerp(shipQ, 1 - Math.exp(-6 * dt));
   if (!keys.has('Space')) { lookYaw *= Math.exp(-6 * dt); lookPitch *= Math.exp(-6 * dt); }
   lookQ.copy(camQ).multiply(dq.setFromAxisAngle(Yv, lookYaw)).multiply(dq.setFromAxisAngle(X, lookPitch));
@@ -1772,6 +1926,18 @@ function updateShip(dt) {
   camera.quaternion.copy(lookQ);
 }
 
+// up, east and north where the walker stands.
+function walkFrame() {
+  if (player.moon) {
+    up.copy(player.moon);
+    moonFrame(up, east, north);
+  } else {
+    const th = (player.gsv ? player.gsv.a : player.a) / R;
+    up.set(-Math.cos(th), 0, -Math.sin(th));
+    east.set(-Math.sin(th), 0, Math.cos(th));
+    north.set(0, 1, 0);
+  }
+}
 function updateWalk(dt) {
   const f = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
   const s = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
@@ -1804,15 +1970,7 @@ function updateWalk(dt) {
     const ground = Math.max(heightAt(player.a, player.u), 0); // walk on the water surface
     ringPoint(player.a, player.u, ground + EYE + player.z, camPos);
   }
-  if (player.moon) {
-    up.copy(player.moon);
-    moonFrame(up, east, north);
-  } else {
-    const th = (g ? g.a : player.a) / R;
-    up.set(-Math.cos(th), 0, -Math.sin(th));
-    east.set(-Math.sin(th), 0, Math.cos(th));
-    north.set(0, 1, 0);
-  }
+  walkFrame();
   fwd.copy(east).multiplyScalar(cy).addScaledVector(north, sy);
   const cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
   fwdP.copy(fwd).multiplyScalar(cp).addScaledVector(up, sp);
@@ -1828,7 +1986,7 @@ addEventListener('mousemove', e => {
   if (mode === 'walk') {
     player.yaw -= e.movementX * 0.002;
     player.pitch = clamp(player.pitch - e.movementY * 0.002, -1.5, 1.5);
-  } else if (keys.has('Space')) {   // free look: swing the camera around the ship
+  } else if (keys.has('Space') || auto) {   // free look: swing the camera around the ship (and while it lands itself)
     lookYaw -= e.movementX * 0.003;
     lookPitch = clamp(lookPitch - e.movementY * 0.003, -1.4, 1.4);
   } else {
@@ -1838,16 +1996,14 @@ addEventListener('mousemove', e => {
   }
 });
 addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || !landing.hidden) return;   // typing in the landing card or chat
+  if (e.target.tagName === 'INPUT' || !landing.hidden || !menu.hidden) return;   // typing, or a card is open
   if (e.code === 'Enter') return openChat();
   keys.add(e.code);
-  if (e.code === 'KeyV') mode === 'walk' ? toShip() : toWalk();
+  if (e.code === 'KeyV' && !auto && boom.t < 0) mode === 'walk' ? toShip() : startLanding();
   if (e.code === 'KeyO') overview();
   if (e.code === 'KeyN') { hudLevel = hudLevel === 1 ? 3 : hudLevel - 1; document.body.dataset.hud = hudLevel; updateHud(); }
-  if (e.code === 'KeyJ' && peers.size) goTo(peers.values().next().value);
   if (e.code === 'KeyL') { headlight.intensity = headlight.intensity ? 0 : 3; updateHud(); }   // intensity, not visible: no shader rebuild
   if (e.code === 'KeyM') { muted = !muted; updateHud(); }
-  if (e.code === 'KeyP') { spinning = !spinning; updateHud(); }
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('wheel', e => {
@@ -1868,7 +2024,7 @@ function updateHud() {
   const top = mode === 'walk'
     ? `<b>WALK</b> &nbsp; <b>Click</b> look &nbsp; <b>WASD</b> walk &nbsp; <b>Space</b> jump &nbsp; <b>Scroll</b> speed (${fmtSpeed(walkSpeed)})<br>`
     : `<b>SHIP</b> &nbsp; <b>Click</b> steer &nbsp; <b>W/S</b> throttle &nbsp; <b>A/D</b> roll &nbsp; hold <b>Space</b> look &nbsp; <b>Esc</b> frees the mouse<br>`;
-  hud.innerHTML = top + `<b>V</b> walk/ship &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>J</b> go to a player &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> HUD (${['', 'off', 'players', 'all'][hudLevel]}) &nbsp; <b>L</b> headlight &nbsp; <b>P</b> day cycle &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
+  hud.innerHTML = top + `<b>V</b> land/board &nbsp; <b>O</b> overview ${beforeOverview ? '(O again: back)' : ''} &nbsp; <b>Enter</b> chat &nbsp; <b>N</b> HUD (${['', 'off', 'players', 'all'][hudLevel]}) &nbsp; <b>L</b> headlight &nbsp; <b>M</b> sound ${muted ? 'off' : 'on'}`;
 }
 spawn();
 
@@ -2126,15 +2282,26 @@ for (const P of PORTS) {
 // ring roads, in three tints. Laid out once in the city's level frame (local -Z east, +Y up, X across) and
 // moved with the camera; drawn out to 600 km (the chunked buildings only reach a few km).
 const SLAB = paint(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), 0xffffff);
-const TOWER_TINTS = [new THREE.Color(0.9, 0.92, 0.95), new THREE.Color(0.68, 0.76, 0.86), new THREE.Color(0.93, 0.89, 0.82)];
+// Each district (between avenues and ring roads) takes one colour family; its towers vary within it.
+const DISTRICT_TINTS = [
+  [[0.55, 0.68, 0.82], [0.42, 0.57, 0.74]],   // blue glass
+  [[0.30, 0.35, 0.43], [0.40, 0.45, 0.52]],   // dark glass
+  [[0.92, 0.92, 0.94], [0.84, 0.86, 0.90]],   // pearl
+  [[0.88, 0.78, 0.62], [0.79, 0.66, 0.50]],   // sandstone
+  [[0.78, 0.53, 0.41], [0.68, 0.45, 0.36]],   // terracotta
+  [[0.52, 0.72, 0.66], [0.44, 0.62, 0.60]],   // verdigris
+  [[0.87, 0.75, 0.46], [0.74, 0.64, 0.42]],   // bronze and gold
+].map(f => f.map(([r, g, b]) => new THREE.Color(r, g, b)));
 for (const c of MEGAS) {
-  const lots = { round: [], slab: [] };
-  for (let i = -40; i <= 40; i++) for (let j = -40; j <= 40; j++) {
+  const lots = { round: [], slab: [] }, n = Math.ceil(0.7 * 1.62 * c.r / 250);   // out to the mid ring at the widest outline
+  for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
     const h = tHash(i, j, 4000 + (c.a | 0)), r1 = (h & 1023) / 1023, r2 = ((h >>> 10) & 1023) / 1023, r3 = ((h >>> 20) & 255) / 255;
     const x = i * 250 + 80 * (r3 - 0.5), y = j * 250 + 80 * (r1 - 0.5), P = megaPlan(c, x, y);
     if (P.road || P.park || P.zone > 2 || r1 > [0.85, 0.4, 0.08][P.zone]) continue;
     const height = [600 + 900 * r2 * r2, 250 + 400 * r2, 120 + 180 * r2][P.zone], w = [90, 60, 40][P.zone] * (1 + 0.6 * r3);
-    lots[r3 < 0.45 ? 'slab' : 'round'].push({ x, y, height, w, ang: Math.atan2(y, x), tint: TOWER_TINTS[(h >>> 28) % 3] });
+    const fam = DISTRICT_TINTS[tHash(P.district, 7, 4200 + (c.a | 0)) % DISTRICT_TINTS.length];
+    const tint = fam[0].clone().lerp(fam[1], r2).multiplyScalar(0.9 + 0.2 * ((h >>> 28) / 15));   // within the family, ±10% brightness
+    lots[r3 < 0.45 ? 'slab' : 'round'].push({ x, y, height, w, ang: Math.atan2(y, x), tint });
   }
   c.grp = new THREE.Group();
   for (const [form, list] of Object.entries(lots)) {
@@ -2250,9 +2417,6 @@ function buildPatch(d0) {
   moonSink.value.set(d0.x, d0.y, d0.z, Math.cos(0.8 * PATCH_HALF / MOON.r));
   moonPatch.visible = true;
 }
-const moonLabel = document.createElement('div');
-moonLabel.className = 'peer poi';
-document.body.append(moonLabel);
 function updateMoon() {
   moonDay.value = dayFactor(Math.atan2(MOON.c.z, MOON.c.x));
   moonMesh.position.copy(MOON.c).sub(camPos);
@@ -2265,8 +2429,6 @@ function updateMoon() {
     moonPatch.visible = false;
     moonSink.value.w = 2;   // nothing sinks
   }
-  if (dist > 2 * MOON.r) placeLabel(moonLabel, moonV.copy(MOON.c).sub(camPos), '');
-  else moonLabel.style.display = 'none';
 }
 // Moon surface frame at unit direction d: east and north along the surface, like the ring's (east × north = up).
 function moonFrame(d, e, n) {
@@ -2276,7 +2438,7 @@ function moonFrame(d, e, n) {
   e.crossVectors(n, d);
 }
 
-// Unnamed markers over the super cities (above the skyline) and the peaks (at the summit), within 2,000 km.
+// Markers over the super cities (named, above the skyline, from anywhere) and the peaks (unnamed, at the summit, within 2,000 km).
 for (const L of [...MEGAS, ...PEAKS]) {
   L.mark = ringPoint(L.a, L.u, MEGAS.includes(L) ? L.h + 1600 : heightAt(L.a, L.u), new THREE.Vector3());
   L.label = document.createElement('div');
@@ -2291,7 +2453,7 @@ function updatePorts() {
   }
   for (const L of [...MEGAS, ...PEAKS]) {
     markV.copy(L.mark).sub(camPos);
-    if (markV.length() < 2e6) placeLabel(L.label, markV, '');
+    if (L.name || markV.length() < 2e6) placeLabel(L.label, markV, L.name ?? '');   // cities show from anywhere, peaks within 2,000 km
     else L.label.style.display = 'none';
   }
   const t = performance.now() / 1000;
@@ -2412,21 +2574,44 @@ landing.onsubmit = e => {
 };
 const Y = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), pUp = new THREE.Vector3();
 let epoch = null, seekPeer = false;
-const swatches = document.getElementById('swatches');
-SHIP_COLORS.forEach((c, i) => {
+// Esc menu: the browser frees the mouse on Esc, so the menu opens whenever pointer lock ends, unless chat
+// or the landing card took the mouse. Resume (or a click on the backdrop) locks it again.
+const menu = document.getElementById('menu'), menuName = document.getElementById('menuName'), menuMsg = document.getElementById('menuMsg');
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  menu.hidden = locked || !landing.hidden || !chatIn.hidden;
+  if (!menu.hidden) {
+    keys.clear();   // keys held now would never see their keyup
+    menuName.value = myName ?? '';
+    document.getElementById('renameRow').hidden = !myName;
+  }
+});
+function resume() {
+  menu.hidden = true;
+  try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch {}
+}
+document.getElementById('resume').onclick = resume;
+menu.onclick = e => { if (e.target === menu) resume(); };
+document.getElementById('rename').onclick = () => {
+  if (menuName.value.trim() !== myName) ws.send(JSON.stringify({ type: 'name', name: menuName.value }));
+};
+menuName.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('rename').click(); });
+// Colour swatches on the landing card and in the menu; both sets stay in step.
+for (const set of document.querySelectorAll('.swatches')) SHIP_COLORS.forEach((c, i) => {
   const b = document.createElement('button');
   b.type = 'button';   // not a submit
   b.title = 'Ship colour';
+  b.dataset.i = i;
   b.style.background = '#' + c.toString(16).padStart(6, '0');
   b.classList.toggle('on', i === shipColor);
   b.onclick = () => {
     shipColor = i;
     hullMat.color.setHex(c);
-    for (const o of swatches.children) o.classList.toggle('on', o === b);
+    for (const o of document.querySelectorAll('.swatches button')) o.classList.toggle('on', +o.dataset.i === i);
     try { localStorage.setItem('shipColor', i); } catch {}
-    joinName.focus();
+    b.blur();
   };
-  swatches.append(b);
+  set.append(b);
 });
 
 const ws = location.host ? new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`) : { readyState: WebSocket.CLOSED };
@@ -2436,8 +2621,17 @@ function updateNet() {
   netEl.innerHTML = full ? 'all rooms are full: flying solo'
     : ws.readyState !== WebSocket.OPEN ? (location.host ? 'offline: flying solo' : '')
     : !myName ? `room ${roomNo ?? '…'}: pick a name`
-    : `room ${roomNo} · <b>${myName}</b> · ${peers.size} other${peers.size === 1 ? '' : 's'} here · <b>Enter</b> chat`;
+    : `room ${roomNo} · <b>Enter</b> chat<br><b>${myName}</b> <span class="who">· ${whereIs(mode === 'walk' ? camPos : shipPos)}</span>` +
+      [...peers.values()].map(p => { const sn = p.snaps[p.snaps.length - 1]; return `<br>${p.name} <span class="who">· ${whereIs(pv.fromArray(sn.w ?? sn.s))}</span>`; }).join('');
 }
+// Where someone is, roughly: the moon, open space, or a clock position around the ring (12 at the first GSV).
+function whereIs(p) {
+  if (p.distanceTo(MOON.c) < 3 * MOON.r) return 'moon';
+  if (Math.abs(p.y) > HW || Math.hypot(p.x, p.z) > R + 5e4) return 'space';
+  const h = Math.round(wrapA(Math.atan2(p.z, p.x) * R) / C * 12) % 12;
+  return `${h || 12} o'clock`;
+}
+setInterval(updateNet, 1000);
 ws.onopen = updateNet;
 ws.onclose = () => { joinName.hidden = true; joinMsg.textContent = ''; updateNet(); };
 ws.onmessage = e => {
@@ -2452,12 +2646,19 @@ ws.onmessage = e => {
   } else if (m.type === 'full') {
     full = true;
   } else if (m.type === 'name-ok') {
+    if (myName && m.name !== myName) addChat(null, `you are now ${m.name}`);
     myName = m.name;   // server-cleaned, so safe to put in innerHTML
+    menuName.value = myName; menuMsg.textContent = '';
     try { localStorage.setItem('name', myName); } catch {}
-    enter();
+    if (!landing.hidden) enter();
     updateNet();
   } else if (m.type === 'name-bad') {
-    joinMsg.textContent = m.reason;
+    joinMsg.textContent = menuMsg.textContent = m.reason;
+  } else if (m.type === 'rename') {
+    const p = peers.get(m.id);
+    if (p) p.name = m.name;
+    addChat(null, `${m.old} is now ${m.name}`);
+    updateNet();
   } else if (m.type === 'chat') {
     addChat(m.name, m.text);
   } else if (m.type === 'crash') {
@@ -2471,6 +2672,7 @@ ws.onmessage = e => {
       p = { snaps: [], ship: ship.clone(), body: new THREE.Mesh(walkerGeo, walkerMat), label: document.createElement('div'), trail: makeTrail() };
       p.ship.getObjectByName('glow').scale.set(1, 1, 1);  // clone copies our current glow stretch
       p.ship.getObjectByName('glow').position.z = GLOW_Z;
+      p.ship.getObjectByName('gear').visible = false;
       p.hull = hullMat.clone();
       p.hull.onBeforeCompile = hullMat.onBeforeCompile;   // clone() doesn't copy it
       p.ship.traverse(o => { if (o.material === hullMat) o.material = p.hull; });
@@ -2529,6 +2731,7 @@ function goTo(p) {
     player.yaw = 0;
     toShip();
   } else {  // flying: sit 60 m behind their ship, stopped
+    auto = null; setGear(0);
     shipQ.set(s[3], s[4], s[5], s[6]);
     shipPos.set(0, 10, 60).applyQuaternion(shipQ).add(pv.set(s[0], s[1], s[2]));
     camQ.copy(shipQ);
@@ -2568,12 +2771,10 @@ function updatePeers() {
 
 const clock = new THREE.Clock();
 const fpsEl = document.getElementById('fps'), statsEl = document.getElementById('stats'), flightEl = document.getElementById('flight');
-const moreEl = document.getElementById('more');
-document.getElementById('gear').onclick = e => { moreEl.hidden = !moreEl.hidden; e.currentTarget.blur(); };
 let frames = 0, fpsT = performance.now();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (spinning) dayUniforms.uDayAngle.value = epoch === null
+  dayUniforms.uDayAngle.value = epoch === null
     ? dayUniforms.uDayAngle.value + DAY_RATE * dt
     : DAY_RATE * (Date.now() - epoch) / 1000 % (2 * Math.PI);  // shared clock, so everyone sees the same day.
     // The relay sends epoch 0, so the angle is wrapped to keep the float uniform precise.
@@ -2582,8 +2783,16 @@ renderer.setAnimationLoop(() => {
   stars.rotation.y = -dayAngle;
 
   if (mode === 'walk') updateWalk(dt);
+  else if (auto) updateAuto(dt);
   else if (boom.t < 0) updateShip(dt);
+  if (camBlend) {   // ease from the old view into the new one after landing or boarding
+    const k = smoothstep(camBlend.t += dt, 0, 1.2);
+    camPos.lerpVectors(camBlend.pos, camPos, k);
+    camera.quaternion.slerpQuaternions(camBlend.q, camera.quaternion, k);
+    if (k >= 1) camBlend = null;
+  }
   updateBoom(dt);
+  updatePuffs(dt);
   dayUniforms.uLocalDay.value = dayFactor(Math.atan2(camPos.z, camPos.x));
   dayUniforms.uCamPos.value.copy(camPos);
   ship.position.copy(shipPos).sub(camPos);

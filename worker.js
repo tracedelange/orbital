@@ -74,6 +74,14 @@ export class Relay extends DurableObject {
     try { m = JSON.parse(data); } catch { return ws.serializeAttachment(me); }
     if (m.type === 'name') {
       const [name, reason] = checkName(m.name);
+      if (name && me.name && name !== me.name) {   // a rename: at most one every 10 s, and the room hears of it
+        if (now - (me.renameAt ?? 0) < 10000) {
+          send(ws, { type: 'name-bad', reason: 'Wait a few seconds before you rename again.' });
+          return ws.serializeAttachment(me);
+        }
+        me.renameAt = now;
+        this.toRoom(ws, me.room, { type: 'rename', id: me.id, old: me.name, name });
+      }
       if (name) me.name = name;
       send(ws, name ? { type: 'name-ok', name } : { type: 'name-bad', reason });
     } else if (!me.name) {
