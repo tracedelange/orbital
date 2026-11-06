@@ -1962,8 +1962,8 @@ function updateShip(dt) {
 // Chase camera: lags the ship's turns a little, then sits behind and above it.
 // Free look (Space held) turns it around the ship; on release it swings back behind.
 function chaseCam(dt) {
-  camQ.slerp(shipQ, 1 - Math.exp(-6 * dt));
-  if (!keys.has('Space')) { lookYaw *= Math.exp(-6 * dt); lookPitch *= Math.exp(-6 * dt); }
+  // While Space is held the camera keeps its own attitude, so rolling (or anything else turning the ship) doesn't swing it.
+  if (!keys.has('Space')) { camQ.slerp(shipQ, 1 - Math.exp(-6 * dt)); lookYaw *= Math.exp(-6 * dt); lookPitch *= Math.exp(-6 * dt); }
   lookQ.copy(camQ).multiply(dq.setFromAxisAngle(Yv, lookYaw)).multiply(dq.setFromAxisAngle(X, lookPitch));
   camPos.copy(CHASE).applyQuaternion(lookQ).add(shipPos);
   camera.quaternion.copy(lookQ);
