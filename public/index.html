@@ -1755,7 +1755,8 @@ function startLanding() {
   target.addScaledVector(u0, GEAR_H);
   const alt = Math.max(pv.copy(shipPos).sub(target).dot(u0), 10);
   auto = { kind: 'land', t: 0, T: clamp(1.5 + 1.2 * Math.log10(alt), 3, 9), start: shipPos.clone(), target, up: u0, ground,
-           q0: shipQ.clone(), q1: levelOn(u0, fwd, new THREE.Quaternion()), dust: false };
+           q0: shipQ.clone(), q1: levelOn(u0, fwd, new THREE.Quaternion()), dust: false,
+           lava: ground.distanceTo(MOON.c) < 2 * MOON.r && (moonH(u0), moonLava > 0.5) };   // touching down in lava destroys the ship
 }
 const autoD = new THREE.Vector3(), autoV = new THREE.Vector3(), autoPrev = new THREE.Vector3();
 function updateAuto(dt) {
@@ -1781,6 +1782,7 @@ function updateAuto(dt) {
   if (s < 1) return;
   auto = null;
   if (A.kind === 'lift') { shipSpeed = 30; return; }
+  if (A.lava) return explode(A.up);
   // Step out on the right, facing the way the ship points.
   shipSpeed = throttle = 0;
   blendCam();
@@ -1914,6 +1916,11 @@ function updateShip(dt) {
     if (d < SOLID_GAP) shipPos.addScaledVector(hit.n, SOLID_GAP - d);
     if (impact(shipSpeed * Math.max(-fwd.dot(hit.n), 0), hit.n)) return;
   }
+  const bh = hitBuilding(shipPos);
+  if (bh && impact(shipSpeed * Math.max(-fwd.dot(bh), 0), bh)) return;
+
+  // The sun (radius 8e4 at the origin) and its shade (1.2e5) burn up anything that reaches the shade's radius.
+  if (shipPos.lengthSq() < 1.2e5 ** 2) { explode(pv.copy(shipPos).normalize()); boom.pos.setLength(1.4e5); return; }   // respawn clear of it
 
   // Keep above the ground or water while over the floor.
   const r = Math.hypot(shipPos.x, shipPos.z);
@@ -1950,6 +1957,7 @@ function updateShip(dt) {
     moonV.divideScalar(mr);
     const g = MOON.r + moonH(moonV) + CLEARANCE;
     if (mr < g) {
+      if (moonLava > 0.5) return explode(moonV);   // any touch on the lava
       shipPos.copy(MOON.c).addScaledVector(moonV, g);
       if (impact(shipSpeed * Math.max(-fwd.dot(moonV), 0), moonV)) return;
     }
@@ -2662,10 +2670,35 @@ const markV = new THREE.Vector3();
 // tested only near them (r is a generous bounding radius). Additive glows aren't solid. Instanced meshes
 // (berthed ships) push back against the flight direction.
 const SOLID_GAP = 6, solidRay = new THREE.Raycaster(), solidO = new THREE.Vector3(), solidHit = { p: new THREE.Vector3(), n: new THREE.Vector3() };
-const SOLIDS = [...GSVS.map(g => ({ grp: g.hull, pos: g.pos, r: Math.hypot(g.L, g.W) / 2 + 1e4 })), ...PORTS.map(P => ({ grp: P.grp, pos: P.pos, r: 2e5 }))];
+const SOLIDS = [...GSVS.map(g => ({ grp: g.hull, pos: g.pos, r: Math.hypot(g.L, g.W) / 2 + 1e4 })), ...PORTS.map(P => ({ grp: P.grp, pos: P.pos, r: 2e5 })),
+                ...MEGAS.map(c => ({ grp: c.grp, pos: c.pos, r: 1.7 * c.r }))];   // super city skyline towers
 for (const S of SOLIDS) {
   S.meshes = [];
   S.grp.traverse(o => { if (o.isMesh && [].concat(o.material)[0].blending !== THREE.AdditiveBlending) S.meshes.push(o); });
+}
+// Settlement buildings (not trees) in the chunks around p: each a cylinder of radius w/2 up to its roof.
+// A ship inside one is pushed out the shallower way, over the roof or sideways; returns that direction.
+const bN = new THREE.Vector3();
+function hitBuilding(p) {
+  const r = Math.hypot(p.x, p.z), th = Math.atan2(p.z, p.x), a = wrapA(th * R), u = p.y, hs = R - r;   // hs: height above sea level
+  const ca = Math.floor(a / BCHUNK), cu = Math.floor(u / BCHUNK);
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    const c = bChunks.get(((ca + i) % NBCHUNK_A + NBCHUNK_A) % NBCHUNK_A + ',' + (cu + j));
+    if (c) for (const b of c.list) {
+      if (b.kind === 'tree' || b.kind === 'pine') continue;
+      const da = arcDelta(a, b.a), du = u - b.u, d = Math.hypot(da, du), rad = b.w / 2 + SOLID_GAP, top = b.g + b.height + SOLID_GAP;
+      if (d > rad || hs > top) continue;
+      if (top - hs < rad - d) {   // over the roof
+        bN.set(-p.x / r, 0, -p.z / r);
+        p.addScaledVector(bN, top - hs);
+      } else {                     // out the side, along the ground away from its centre
+        bN.set(-Math.sin(th) * da / d, du / d, Math.cos(th) * da / d);
+        p.addScaledVector(bN, rad - d);
+      }
+      return bN;
+    }
+  }
+  return null;
 }
 function hitSolids(from, dir, len) {
   for (const S of SOLIDS) {
