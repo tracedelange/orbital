@@ -2046,7 +2046,9 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('wheel', e => {
-  const k = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+  // Scale by how far the wheel moved: a mouse notch is about 100 px (a ~22% step), while a trackpad sends
+  // many small deltas, which would each have been a full step. deltaMode 1 (lines, Firefox) is ~33 px a line.
+  const px = clamp(e.deltaY * (e.deltaMode === 1 ? 33 : 1), -150, 150), k = Math.exp(-0.002 * px);
   if (mapOpen) mapZoom = clamp(mapZoom * k, 1, 300);
   else if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, WALK_MAX); updateHud(); }
   else shipSpeed = clamp(Math.max(shipSpeed, 4) * k, 0, SHIP_MAX);
