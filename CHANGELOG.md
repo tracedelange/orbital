@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.0](https://github.com/tracedelange/orbital/compare/v1.1.2...v1.2.0) (2026-11-06)
+
+
+### Features
+
+* **flight:** free look (Space) no longer follows the ship when it rolls ([a7dc5b9](https://github.com/tracedelange/orbital/commit/a7dc5b94279d81c270fb014df5e1029d5f28466d))
+* **flight:** keep the set speed under the height limit, raise the ground limit, ease steering at speed ([a6082bf](https://github.com/tracedelange/orbital/commit/a6082bffec985fb9e6da244dfb5fa7f73f8acee8))
+* **hud:** drop the unnamed peak markers ([92c7be6](https://github.com/tracedelange/orbital/commit/92c7be61ddd26e93d986eb8e6bd6d1f2eb54947a))
+* **moon:** observatory crater with a lava lake, rays and a richer moon surface ([cd477b1](https://github.com/tracedelange/orbital/commit/cd477b12af54f0840464a91eb858ab77e2a685b8))
+* **ship:** crash into buildings, the sun and the lava ([3b4ccd4](https://github.com/tracedelange/orbital/commit/3b4ccd44eacef137fa6c085c313e406008619b36))
+* **terrain:** forests, as dark canopy patches with conifers up close ([695ee11](https://github.com/tracedelange/orbital/commit/695ee11d5bf3c57fd38bcb545d81f4e01044e602))
+* **traffic:** eight procedurally generated transport craft designs ([51ad925](https://github.com/tracedelange/orbital/commit/51ad9255b45375e4cc0b9d63d719f3a9ab70ec7c))
+
+
+### Bug Fixes
+
+* **chat:** take the mouse back after sending or closing chat ([d71a9ee](https://github.com/tracedelange/orbital/commit/d71a9ee1dcffadf3f7a29659901d4e8e96790306))
+* **input:** scale scroll by wheel distance, so trackpads no longer jump ([a14700c](https://github.com/tracedelange/orbital/commit/a14700c9830c79508ab4d9d177ad0843ffb63883))
+* **relay:** reconnect after a dropped socket, keeping your name and position ([7310411](https://github.com/tracedelange/orbital/commit/7310411f8c564872586647d9207fd86260578732))
+* **ship:** build the fuselage outside out, so the wing no longer shows through it ([81e8081](https://github.com/tracedelange/orbital/commit/81e8081f6dc8888394b7fbc676a4ec1e3d0a64b3))
+* **ship:** stop the ship tunnelling through the ring floor at high speed, from either side ([5835030](https://github.com/tracedelange/orbital/commit/5835030d79a4bd1cbeffbf921d8053ddbe52b1d9))
+
 ## [1.1.2](https://github.com/tracedelange/orbital/compare/v1.1.1...v1.1.2) (2026-11-05)
 
 
