@@ -1248,7 +1248,7 @@ function explode(surfUp) {
     v.randomDirection().addScaledVector(surfUp, 1.2).normalize().multiplyScalar(rnd(20, 150));
   ship.visible = false;
   fireball.visible = debris.visible = true;
-  shipSpeed = 0;
+  shipSpeed = throttle = 0;
   crashSound(true);
   if (ws.readyState === WebSocket.OPEN && myName) ws.send(JSON.stringify({ type: 'crash' }));
 }
@@ -1276,16 +1276,18 @@ function updateBoom(dt) {
 }
 
 const SHIP_MAX = 2e5, CLEARANCE = 3;
+let steerX = 0, steerY = 0;   // mouse movement not yet turned into ship rotation
 const shipPos = new THREE.Vector3(), shipQ = new THREE.Quaternion(), camQ = new THREE.Quaternion();
 const CHASE = new THREE.Vector3(0, 6, 25);
 const lookQ = new THREE.Quaternion();
 let lookYaw = 0, lookPitch = 0;
 let shipSpeed = 100, shipAlt = Infinity;   // shipAlt: height over the ground, water or GSV deck below
+let throttle = 100;   // the speed the player set (W/S, scroll); shipSpeed follows it, held under speedCap()
 const groundUp = new THREE.Vector3();       // up at the surface under the ship, for its shadow
-// Top speed grows with that height, so low flight stays controllable. On high: 150 m/s at 50 m, 2 km/s at 1 km,
+// Top speed grows with that height, so low flight stays controllable. On high: 150 m/s on the ground, 250 m/s at 50 m, 2 km/s at 1 km,
 // the full SHIP_MAX from 100 km up. Lower presets grow it more slowly, so less terrain streams in per second.
-// Above the cap, speed bleeds off over about a second.
-const speedCap = () => Math.min(SHIP_MAX, 50 + Q.speedK * shipAlt);
+// Above the cap, speed bleeds off over about a second; throttle keeps the set speed, so climbing brings it back.
+const speedCap = () => Math.min(SHIP_MAX, 150 + Q.speedK * shipAlt);
 
 let mode = 'ship', walkSpeed = 8, muted = false, mapOpen = false;
 const WALK_MAX = 30;   // scroll can raise walk speed up to this (m/s, about 67 mph)
@@ -1660,7 +1662,7 @@ function spawn() {
   ringPoint(a, g.u, Math.max(heightAt(a, g.u), 0) + 300, shipPos);
   levelQ(a, shipQ);
   camQ.copy(shipQ);
-  shipSpeed = 100;
+  shipSpeed = throttle = 100;
   mode = 'ship';
   headlight.intensity = dayFactor(a / R) > 0.5 ? 0 : 3;   // off in daylight; L turns it on
   updateHud();
@@ -1706,7 +1708,7 @@ function toShip() {
   }
   player.moon = null;
   camQ.copy(shipQ);
-  shipSpeed = 0;
+  shipSpeed = throttle = 0;
   const g0 = new THREE.Vector3(), u0 = new THREE.Vector3();
   surfaceAt(shipPos, g0, u0);
   auto = { kind: 'lift', t: 0, T: 2.2, start: shipPos.clone(), up: u0, ground: g0 };
@@ -1780,7 +1782,7 @@ function updateAuto(dt) {
   auto = null;
   if (A.kind === 'lift') { shipSpeed = 30; return; }
   // Step out on the right, facing the way the ship points.
-  shipSpeed = 0;
+  shipSpeed = throttle = 0;
   blendCam();
   toWalk(pv.set(10, 0, 0).applyQuaternion(shipQ).add(shipPos));
   walkFrame();
@@ -1836,7 +1838,7 @@ function overview() {
   if (beforeOverview && shipPos.distanceTo(OVERVIEW_POS) < 1e5) {
     const b = beforeOverview;
     beforeOverview = null;
-    shipPos.copy(b.pos); shipQ.copy(b.q); camQ.copy(b.q); shipSpeed = b.speed;
+    shipPos.copy(b.pos); shipQ.copy(b.q); camQ.copy(b.q); shipSpeed = throttle = b.speed;
     Object.assign(player, b.player);
     mode = b.mode;
     updateHud();
@@ -1847,7 +1849,7 @@ function overview() {
   shipPos.copy(OVERVIEW_POS);
   shipQ.setFromRotationMatrix(new THREE.Matrix4().lookAt(shipPos, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)));
   camQ.copy(shipQ);
-  shipSpeed = 0;
+  shipSpeed = throttle = 0;
   updateHud();
 }
 
@@ -1883,10 +1885,15 @@ function updateShadow() {
 }
 
 function updateShip(dt) {
-  if (keys.has('KeyW')) shipSpeed = Math.min(Math.max(shipSpeed, 5) * Math.exp(1.5 * dt), SHIP_MAX);
-  if (keys.has('KeyS')) shipSpeed = shipSpeed < 1 ? 0 : shipSpeed * Math.exp(-2.5 * dt);
-  const cap = speedCap();
-  if (shipSpeed > cap) shipSpeed = cap + (shipSpeed - cap) * Math.exp(-3 * dt);
+  if (keys.has('KeyW')) throttle = Math.min(Math.max(throttle, 5) * Math.exp(1.5 * dt), SHIP_MAX);
+  if (keys.has('KeyS')) { throttle = Math.min(throttle, shipSpeed); throttle = throttle < 1 ? 0 : throttle * Math.exp(-2.5 * dt); }   // slows from the speed you see
+  const want = Math.min(throttle, speedCap());
+  shipSpeed = want + (shipSpeed - want) * Math.exp(-3 * dt);
+
+  // Mouse steering: at once at low speed, eased in over ~0.12 s toward top speed, so small twitches don't jerk the view.
+  const tau = 0.12 * smoothstep(shipSpeed, 500, 5e4), k = tau ? 1 - Math.exp(-dt / tau) : 1;
+  shipQ.multiply(dq.setFromAxisAngle(Yv, -steerX * k * 0.002)).multiply(dq.setFromAxisAngle(X, -steerY * k * 0.002));
+  steerX *= 1 - k; steerY *= 1 - k;
 
   // A/D roll. Without roll input inside the ring, the wings drift back to level with the local floor.
   // Outside it (past the walls or the hull) there is no floor to level with, so rotation stays free.
@@ -2032,9 +2039,8 @@ addEventListener('mousemove', e => {
     lookYaw -= e.movementX * 0.003;
     lookPitch = clamp(lookPitch - e.movementY * 0.003, -1.4, 1.4);
   } else {
-    // Mouse turns the ship about its own axes: right/left is yaw, up/down is pitch.
-    shipQ.multiply(dq.setFromAxisAngle(up.set(0, 1, 0), -e.movementX * 0.002));
-    shipQ.multiply(dq.setFromAxisAngle(X, -e.movementY * 0.002));
+    // Mouse turns the ship about its own axes: right/left is yaw, up/down is pitch. updateShip applies it.
+    steerX += e.movementX; steerY += e.movementY;
   }
 });
 addEventListener('keydown', e => {
@@ -2059,7 +2065,7 @@ addEventListener('wheel', e => {
   const px = clamp(e.deltaY * (e.deltaMode === 1 ? 33 : 1), -150, 150), k = Math.exp(-0.002 * px);
   if (mapOpen) mapZoom = clamp(mapZoom * k, 1, 300);
   else if (mode === 'walk') { walkSpeed = clamp(walkSpeed * k, 0.5, WALK_MAX); updateHud(); }
-  else shipSpeed = clamp(Math.max(shipSpeed, 4) * k, 0, SHIP_MAX);
+  else throttle = clamp(Math.max(k < 1 ? Math.min(throttle, shipSpeed) : throttle, 4) * k, 0, SHIP_MAX);   // down slows from the speed you see
 });
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -3242,7 +3248,7 @@ function goTo(p) {
     shipQ.set(s[3], s[4], s[5], s[6]);
     shipPos.set(0, 10, 60).applyQuaternion(shipQ).add(pv.set(s[0], s[1], s[2]));
     camQ.copy(shipQ);
-    shipSpeed = 0;
+    shipSpeed = throttle = 0;
     mode = 'ship';
     updateHud();
   }
@@ -3373,7 +3379,7 @@ renderer.setAnimationLoop(() => {
     }
     const qLabel = Object.keys(QUALITY).find(k => QUALITY[k] === Q);
     fpsEl.textContent = `${Math.round(fps)} fps · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris · res ${res.toFixed(2)}× · ${qLabel}${autoPickAt < Infinity ? ' (testing)' : ''}`;
-    const capped = keys.has('KeyW') && speedCap() < SHIP_MAX && shipSpeed > 0.97 * speedCap();   // throttling into the height limit
+    const capped = throttle > 1.03 * speedCap();   // set faster than the height allows
     flightEl.innerHTML = mode === 'ship' ? `<b>${fmtSpeed(shipSpeed)}</b>${capped ? ' <span>· climb to go faster</span>' : ''}` : '';
     statsEl.innerHTML = `${tileCount} tiles${deckCount ? ` + ${deckCount} deck` : ''}, deepest level ${deepest}<br>` +
       `finest spacing ${(TILE0 / 2 ** deepest / GRID).toFixed(3)} m<br>${shrubMesh.count} shrubs, ${bMeshes.terrace.count + bMeshes.tower.count + bMeshes.dome.count} buildings, ${bMeshes.tree.count} trees, ${nearTowns.length} settlements near`;
