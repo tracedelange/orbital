@@ -85,7 +85,7 @@ The page changes its render resolution to hold about 50 fps. Medium and High nev
 
 You spawn next to the GSV in the best daylight. One day takes 30 minutes.
 
-The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 400 km east of the first GSV), two super cities with skylines of towers up to 1.5 km, and seven straits where the land strip gives way to sea and islands. A ◆ marker with the distance shows each peak within 2,000 km. The super cities, Ossuen and Telmarra, have a marker with their name that shows from anywhere.
+The ring has fixed landmarks: six peaks from 12 to 22 km tall (the tallest is 400 km east of the first GSV), two super cities with skylines of towers up to 1.5 km, and seven straits where the land strip gives way to sea and islands. The super cities, Ossuen and Telmarra, have a marker with their name that shows from anywhere.
 
 A moon, 300 km in radius, hangs about 6,500 km past one wall. Fly there; above the ring the speed limit lifts. It has day and night with the shade, so it shows phases from the ring. You can land on it and walk (V), where the gravity is 1.62 m/s², so jumps go about six times higher. An observatory stands on the side away from the near arc of the ring: a domed hall, a terrace with benches that face the ring, and a landing pad. Set it as the waypoint on the map to find it.
 

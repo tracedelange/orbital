@@ -2658,9 +2658,9 @@ function moonFrame(d, e, n) {
   e.crossVectors(n, d);
 }
 
-// Markers over the super cities (named, above the skyline, from anywhere) and the peaks (unnamed, at the summit, within 2,000 km).
-for (const L of [...MEGAS, ...PEAKS]) {
-  L.mark = ringPoint(L.a, L.u, MEGAS.includes(L) ? L.h + 1600 : heightAt(L.a, L.u), new THREE.Vector3());
+// Markers over the super cities: named, above the skyline, from anywhere.
+for (const L of MEGAS) {
+  L.mark = ringPoint(L.a, L.u, L.h + 1600, new THREE.Vector3());
   L.label = document.createElement('div');
   L.label.className = 'peer poi';
   document.body.append(L.label);
@@ -2722,11 +2722,7 @@ function updatePorts() {
     c.grp.position.copy(c.pos).sub(camPos);
     c.grp.visible = c.grp.position.length() < 6e5;
   }
-  for (const L of [...MEGAS, ...PEAKS]) {
-    markV.copy(L.mark).sub(camPos);
-    if (L.name || markV.length() < 2e6) placeLabel(L.label, markV, L.name ?? '');   // cities show from anywhere, peaks within 2,000 km
-    else L.label.style.display = 'none';
-  }
+  for (const L of MEGAS) placeLabel(L.label, markV.copy(L.mark).sub(camPos), L.name);
   const t = performance.now() / 1000;
   for (const P of PORTS) {
     P.grp.position.copy(P.pos).sub(camPos);
