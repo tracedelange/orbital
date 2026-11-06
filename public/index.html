@@ -1983,7 +1983,10 @@ function updateWalk(dt) {
   const g = player.gsv;
   if (player.moon) {
     moonFrame(player.moon, east, north);
+    const was = pv.copy(player.moon);
     player.moon.addScaledVector(east, stepA / MOON.r).addScaledVector(north, stepU / MOON.r).normalize();
+    moonH(player.moon);
+    if (moonLava > 0.5 && (moonH(was), moonLava <= 0.5)) player.moon.copy(was);   // the lava lake can't be walked into
   } else if (g) {  // held 10 m inside the deck's edge
     player.a = clamp(player.a + stepA, -g.L / 2 + 10, g.L / 2 - 10);
     player.u = clamp(player.u + stepU, -g.W / 2 + 10, g.W / 2 - 10);
@@ -2381,13 +2384,23 @@ function vnoise3(x, y, z, seed) {   // value noise in -1..1
               lerp(lerp(c(0, 0, 1), c(1, 0, 1), fx), lerp(c(0, 1, 1), c(1, 1, 1), fx), fy), fz);
 }
 // Height above radius MOON.r along unit direction d. Craters sit in the cells of a cube-face grid at four
-// sizes (a bowl with a raised rim; about 40% of cells hold one), over rolling ground.
+// sizes (a bowl with a raised rim; about 40% of cells hold one), over rolling ground. Each call leaves the
+// brightness of nearby crater rims in moonRim, for moonTint(), and 1 in moonLava where it is lava.
+// The observatory crater (Rc across-radius) is centred on OBS.d: a calm floor filled with a lava lake at LAVA,
+// a central peak under the observatory, a raised rim and an ejecta apron.
+const CRATER = { r: 6e4, floor: -3500, rim: 3000, peak: 3000, lava: -3400 };
+function craterH(q) {   // q: distance from the crater's centre over CRATER.r
+  if (q >= 1) return CRATER.rim * Math.exp(-(((q - 1) / 0.3) ** 2));
+  return CRATER.floor + (CRATER.rim - CRATER.floor) * smoothstep(q, 0.75, 1) + CRATER.peak * (1 - smoothstep(q, 0.08, 0.2));
+}
+let moonRim = 0, moonLava = 0;
 function moonH0(d) {
   const ax = Math.abs(d.x), ay = Math.abs(d.y), az = Math.abs(d.z);
   let face, u, v;
   if (ax >= ay && ax >= az) { face = d.x > 0 ? 0 : 1; u = d.y / ax; v = d.z / ax; }
   else if (ay >= az) { face = d.y > 0 ? 2 : 3; u = d.x / ay; v = d.z / ay; }
   else { face = d.z > 0 ? 4 : 5; u = d.x / az; v = d.y / az; }
+  moonRim = 0;
   let h = 900 * vnoise3(d.x * 8, d.y * 8, d.z * 8, 1) + 250 * vnoise3(d.x * 40, d.y * 40, d.z * 40, 2) + 40 * vnoise3(d.x * 300, d.y * 300, d.z * 300, 3);
   for (const [n, depth, seed] of MOON_CRATERS) {
     const cu = (u + 1) / 2 * n, cv = (v + 1) / 2 * n, i0 = Math.floor(cu), j0 = Math.floor(cv);
@@ -2397,14 +2410,20 @@ function moonH0(d) {
       const rc = 0.2 + 0.25 * ((hs >>> 8) & 255) / 255;   // radius, in cells
       const q = Math.hypot(cu - i - 0.2 - 0.6 * ((hs >>> 16) & 255) / 255, cv - j - 0.2 - 0.6 * ((hs >>> 24) & 255) / 255) / rc;
       h += depth * (q < 1 ? q * q - 0.8 : 0.2 * Math.exp(-(((q - 1) / 0.3) ** 2)));
+      moonRim += (seed > 2 ? 1 : 0.4) * Math.exp(-(((q - 1) / 0.3) ** 2));   // fresh small craters show brightest
     }
   }
-  return h;
+  const q = Math.acos(clamp(d.dot(OBS.d), -1, 1)) * MOON.r / CRATER.r;
+  if (q < 1) h *= 0.3 + 0.7 * smoothstep(q, 0.7, 1);   // a calmer floor
+  h += craterH(q);
+  moonLava = q < 1 ? clamp((CRATER.lava - h) / 400 + 0.5, 0, 1) : 0;   // soft, so the shore isn't jagged across big triangles
+  return q < 1 ? Math.max(h, CRATER.lava) : h;
 }
 // The observatory sits on ground flattened to the height at its centre (out to 1.2 km, blending by 2.5 km).
 // Its site is on the side of the moon away from the near arc of the ring, tilted so that arc stands about
 // 30° over the horizon in front of the deck, with the far arc and the sun high behind.
 const OBS = { name: 'Observatory', d: new THREE.Vector3(-0.6 * Math.cos(0.3), -1, -0.6 * Math.sin(0.3)).normalize() };
+OBS.e1 = new THREE.Vector3(0, 1, 0).cross(OBS.d).normalize(); OBS.e2 = OBS.d.clone().cross(OBS.e1);   // frame for the rays
 OBS.h0 = moonH0(OBS.d);
 OBS.pos = MOON.c.clone().addScaledVector(OBS.d, MOON.r + OBS.h0);
 const OBS_C0 = Math.cos(1200 / MOON.r), OBS_C1 = Math.cos(2500 / MOON.r);
@@ -2412,29 +2431,63 @@ function moonH(d) {
   const h = moonH0(d), k = smoothstep(d.dot(OBS.d), OBS_C1, OBS_C0);
   return h + (OBS.h0 - h) * k;
 }
+// Surface colour (a linear multiplier on the material colour) along d, after moonH(d): dark, slightly blue
+// basalt seas over pale highlands, mottling, and bright crater rims.
+function moonTint(d, c) {
+  const sea = smoothstep(vnoise3(d.x * 2.5, d.y * 2.5, d.z * 2.5, 7) + 0.4 * vnoise3(d.x * 7, d.y * 7, d.z * 7, 8), 0.05, 0.35);
+  // Rays: pale streaks fanning out from the observatory crater, fading over a few hundred km.
+  const q = Math.acos(clamp(d.dot(OBS.d), -1, 1)) * MOON.r / CRATER.r, phi = Math.atan2(d.dot(OBS.e2), d.dot(OBS.e1));
+  const ray = q > 0.9 ? smoothstep(vnoise3(Math.cos(phi) * 12, Math.sin(phi) * 12, 0, 11), 0.2, 0.55) * Math.min(1, Math.exp(-(q - 1) / 3)) : 0;
+  const b = (1.1 - 0.5 * sea) * (1 + 0.15 * vnoise3(d.x * 60, d.y * 60, d.z * 60, 9)) + 0.35 * Math.min(moonRim, 1) + 0.6 * ray;
+  return c.setRGB(b * (1 - 0.04 * sea), b, b * (1 + 0.06 * sea));
+}
 // Moon materials: lit by the sun like everything else, but its day factor is the moon's own (uMoonDay).
 // The whole-moon mesh sinks 3 km inside uSink's cone (the detailed patch under the camera) so the two don't fight.
-const moonDay = { value: 1 }, moonSink = { value: new THREE.Vector4(0, 0, 0, 2) };   // xyz: patch direction, w: cos of its angular radius
+const moonDay = { value: 1 }, moonTime = { value: 0 }, moonCam = { value: new THREE.Vector3() }, moonSink = { value: new THREE.Vector4(0, 0, 0, 2) };   // xyz: patch direction, w: cos of its angular radius
 function moonMat(sink) {
-  const m = new THREE.MeshStandardMaterial({ color: 0x9c9890, roughness: 1, flatShading: true });
+  const m = new THREE.MeshStandardMaterial({ color: 0x9c9890, roughness: 1, flatShading: true, vertexColors: true });
   m.onBeforeCompile = sh => {
     patchDay(sh, 'local');
-    sh.uniforms.uMoonDay = moonDay;
-    sh.uniforms.uSink = moonSink;
-    sh.vertexShader = 'uniform float uMoonDay;\nuniform vec4 uSink;\n' + sh.vertexShader.replace('vDay = uLocalDay;', 'vDay = uMoonDay;' +
-      (sink ? `\nif (dot(normalize(transformed), uSink.xyz) > uSink.w) transformed *= ${(1 - 3000 / MOON.r).toFixed(6)};` : ''));
+    Object.assign(sh.uniforms, { uMoonDay: moonDay, uSink: moonSink, uCamMoon: moonCam, uTime: moonTime });
+    sh.vertexShader = 'uniform float uMoonDay;\nuniform vec4 uSink;\nuniform vec3 uCamMoon;\nvarying vec3 vMoonP;\nattribute float aLava;\nvarying float vLava;\n' + sh.vertexShader.replace('vDay = uLocalDay;', 'vDay = uMoonDay;\nvLava = aLava;' +
+      (sink ? `\nif (dot(normalize(transformed), uSink.xyz) > uSink.w) transformed *= ${(1 - 3000 / MOON.r).toFixed(6)};` : '') +
+      '\nvMoonP = (modelMatrix * vec4(transformed, 1.0)).xyz + uCamMoon;');
+    // Grain: value noise at 7 m, 1.2 m and 0.25 m on the moon-centred position, fading out by 3 km away.
+    sh.fragmentShader = `uniform vec3 uCamMoon;\nuniform float uTime;\nvarying vec3 vMoonP;\nvarying float vLava;
+      float mHash(vec3 p) { uvec3 q = uvec3(ivec3(p)) * uvec3(1597334673u, 3812015801u, 2798796415u); return float((q.x ^ q.y ^ q.z) * 1597334673u) / 4294967295.0; }
+      float mNoise(vec3 p) {
+        vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(mHash(i), mHash(i + vec3(1, 0, 0)), f.x), mix(mHash(i + vec3(0, 1, 0)), mHash(i + vec3(1, 1, 0)), f.x), f.y),
+                   mix(mix(mHash(i + vec3(0, 0, 1)), mHash(i + vec3(1, 0, 1)), f.x), mix(mHash(i + vec3(0, 1, 1)), mHash(i + 1.0), f.x), f.y), f.z) * 2.0 - 1.0;
+      }\n` + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float mg = 0.5 * mNoise(vMoonP / 7.0) + 0.3 * mNoise(vMoonP / 1.2) + 0.2 * mNoise(vMoonP * 4.0);
+      diffuseColor.rgb *= (1.0 + 0.3 * mg * (1.0 - smoothstep(300.0, 3000.0, length(vMoonP - uCamMoon)))) * (1.0 - 0.85 * vLava);`)
+      // Lava glows day and night (added after the day dimming): dark crust broken by slowly drifting bright cracks.
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+      // Two scales: veins km across, and fine cracks near the camera. Each fades to its average glow once it
+      // gets smaller than a pixel (cracks past ~20 km, veins past ~300 km), so the lake doesn't sparkle.
+      float dist = length(vMoonP - uCamMoon), near = 1.0 - smoothstep(5e3, 2e4, dist), mid = 1.0 - smoothstep(1e5, 4e5, dist);
+      float vein = mid > 0.0 ? 1.0 - smoothstep(0.0, 0.3, abs(mNoise(vMoonP / 3000.0 + vec3(uTime * 0.01)))) : 0.0;
+      float crack = near > 0.0 ? 1.0 - smoothstep(0.0, 0.12, abs(mNoise(vMoonP / 400.0 + vec3(0.0, uTime * 0.03, 0.0)) + 0.5 * mNoise(vMoonP / 90.0 - vec3(uTime * 0.05)))) : 0.0;
+      float glow = mix(mix(0.3, 0.1 + 0.9 * vein, mid), 0.1 + 0.5 * vein + 2.0 * crack, near);
+      totalEmissiveRadiance += vLava * vec3(0.55, 0.06, 0.03) * glow;   // deep, dark red`);
   };
   return m;
 }
 const moonGeo = (() => {
   const g = new THREE.IcosahedronGeometry(1, 80);   // ~4 km triangles
   g.deleteAttribute('normal'); g.deleteAttribute('uv');
-  const m = mergeVertices(g), p = m.attributes.position, d = new THREE.Vector3();
+  const m = mergeVertices(g), p = m.attributes.position, d = new THREE.Vector3(), c = new THREE.Color();
+  const col = new THREE.BufferAttribute(new Float32Array(p.count * 3), 3), lava = new THREE.BufferAttribute(new Float32Array(p.count), 1);
   for (let i = 0; i < p.count; i++) {
     d.fromBufferAttribute(p, i).normalize();
-    d.multiplyScalar(MOON.r + moonH(d));
-    p.setXYZ(i, d.x, d.y, d.z);
+    const r = MOON.r + moonH(d);
+    lava.setX(i, moonLava);
+    moonTint(d, c); col.setXYZ(i, c.r, c.g, c.b);
+    p.setXYZ(i, d.x * r, d.y * r, d.z * r);
   }
+  m.setAttribute('color', col);
+  m.setAttribute('aLava', lava);
   return m;
 })();
 const moonMesh = new THREE.Mesh(moonGeo, moonMat(true));
@@ -2452,32 +2505,37 @@ const patchGeo = new THREE.BufferGeometry();
   }
   patchGeo.setIndex(idx);
   patchGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PATCH_N * PATCH_N * 3), 3));
+  patchGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(PATCH_N * PATCH_N * 3), 3));
+  patchGeo.setAttribute('aLava', new THREE.BufferAttribute(new Float32Array(PATCH_N * PATCH_N), 1));
 }
 const moonPatch = new THREE.Mesh(patchGeo, moonMat(false));
 moonPatch.frustumCulled = false;
 moonPatch.visible = false;
 scene.add(moonPatch);
-const patchC = new THREE.Vector3(), patchDir = new THREE.Vector3(), moonV = new THREE.Vector3(), pe1 = new THREE.Vector3(), pe2 = new THREE.Vector3(), pd = new THREE.Vector3();
+const patchC = new THREE.Vector3(), patchDir = new THREE.Vector3(), moonV = new THREE.Vector3(), pe1 = new THREE.Vector3(), pe2 = new THREE.Vector3(), pd = new THREE.Vector3(), pc = new THREE.Color();
 function buildPatch(d0) {
   patchDir.copy(d0);
   pe1.set(0, 1, 0).cross(d0);
   if (pe1.lengthSq() < 1e-6) pe1.set(1, 0, 0).cross(d0);
   pe1.normalize(); pe2.crossVectors(d0, pe1);
-  const r0 = MOON.r + moonH(d0), arr = patchGeo.attributes.position.array;
+  const r0 = MOON.r + moonH(d0), arr = patchGeo.attributes.position.array, col = patchGeo.attributes.color.array, lava = patchGeo.attributes.aLava.array;
   patchC.copy(MOON.c).addScaledVector(d0, r0);
   for (let i = 0; i < PATCH_N; i++) for (let j = 0; j < PATCH_N; j++) {
     const x = -PATCH_HALF + 2 * PATCH_HALF * i / (PATCH_N - 1), y = -PATCH_HALF + 2 * PATCH_HALF * j / (PATCH_N - 1);
     pd.copy(d0).multiplyScalar(MOON.r).addScaledVector(pe1, x).addScaledVector(pe2, y).normalize();
     const r = MOON.r + moonH(pd), k = (i * PATCH_N + j) * 3;
     arr[k] = pd.x * r - d0.x * r0; arr[k + 1] = pd.y * r - d0.y * r0; arr[k + 2] = pd.z * r - d0.z * r0;
+    lava[i * PATCH_N + j] = moonLava;
+    moonTint(pd, pc); col[k] = pc.r; col[k + 1] = pc.g; col[k + 2] = pc.b;
   }
-  patchGeo.attributes.position.needsUpdate = true;
+  patchGeo.attributes.position.needsUpdate = patchGeo.attributes.color.needsUpdate = patchGeo.attributes.aLava.needsUpdate = true;
   moonSink.value.set(d0.x, d0.y, d0.z, Math.cos(0.8 * PATCH_HALF / MOON.r));
   moonPatch.visible = true;
 }
 function updateMoon() {
   moonDay.value = dayFactor(Math.atan2(MOON.c.z, MOON.c.x));
   moonMesh.position.copy(MOON.c).sub(camPos);
+  moonCam.value.copy(camPos).sub(MOON.c);
   const dist = moonMesh.position.length();
   if (dist < MOON.r + 6e4) {
     moonV.copy(camPos).sub(MOON.c).divideScalar(dist);
@@ -2491,6 +2549,7 @@ function updateMoon() {
   obs.visible = obs.position.length() < 3e5;
   OBS.beacon.visible = performance.now() % 2000 < 300;
   OBS.pool.opacity = 0.45 * (1 - moonDay.value);
+  moonTime.value = performance.now() / 1000 % 1e4;
 }
 // Plaque text on the observatory terrace, left to right as you face the ring. Numbers come from R, HW, the
 // land edge (landEdge, about 0.31 of the half width) and MOON; change them if those change.
