@@ -1911,10 +1911,15 @@ function updateShip(dt) {
   // Keep above the ground or water while over the floor.
   const r = Math.hypot(shipPos.x, shipPos.z);
   shipAlt = Infinity;
-  if (r < R + 1000 && Math.abs(shipPos.y) < HW) {
+  if ((r < R + 1000 || r0 < R) && Math.abs(shipPos.y) < HW) {
     const a = wrapA(Math.atan2(shipPos.z, shipPos.x) * R);
     const minR = R - Math.max(heightAt(a, shipPos.y), 0) - CLEARANCE;
-    if (r > minR) {
+    // From below, the underside stops the ship at R + 1000. A step can be longer than the floor is thick,
+    // so the side of the sea-level radius R the ship was on before the step (r0) decides which face it meets.
+    if (r0 > R && r < R + 1000) {
+      shipPos.x *= (R + 1000) / r; shipPos.z *= (R + 1000) / r;
+      if (impact(shipSpeed * Math.max(-(fwd.x * shipPos.x + fwd.z * shipPos.z) / r, 0), up.set(shipPos.x / r, 0, shipPos.z / r))) return;
+    } else if (r > minR) {
       shipPos.x *= minR / r; shipPos.z *= minR / r;
       if (impact(shipSpeed * Math.max((fwd.x * shipPos.x + fwd.z * shipPos.z) / minR, 0), up.set(-shipPos.x / minR, 0, -shipPos.z / minR))) return;
     }
