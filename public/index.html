@@ -2276,11 +2276,58 @@ function updateAudio() {
 // Meshes point their nose along +Z; craftQ turns +Z to heading yaw (atan2 of du, da) with up to the axis.
 const TRAFFIC_RANGE = 15000, N_CONVOYS = 6, CONVOY_MAX = 7, N_THERMALS = 8;
 const craftMat = withDay(new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.4, roughness: 0.4 }), 'local');
-const cargoGeo = mergeGeometries([
-  paint(new THREE.CapsuleGeometry(4, 28, 4, 12).rotateX(Math.PI / 2).scale(1.3, 0.8, 1), 0xd8dce3),          // hull
-  paint(new THREE.BoxGeometry(14, 1.2, 6).translate(0, -0.5, -6), 0xb7bdc8),                                // stub wings
-  paint(new THREE.CylinderGeometry(1.4, 1.4, 1, 12).rotateX(Math.PI / 2).translate(0, 0, -18.4), 0x7fd4ff), // drive glow
-]);
+// Transport craft come in CRAFT_DESIGNS designs, each built from a seed: a rounded or boxy hull 24-38 m long
+// with a livery band, maybe cargo (containers under or on top, or side tanks), maybe wings, a fin, and one to
+// three drives with glowing exhausts. Nose +Z. A fleet keeps one instanced mesh per design.
+const CRAFT_DESIGNS = 8;
+const HULL_COLS = [0xd8dce3, 0xc9c2b4, 0x4a505a, 0xe8e4da, 0x9aa3ad], LIVERY = [0xe0663a, 0x3a9fd0, 0xe2c94a, 0x5fbf7a, 0xc8453c, 0x8a5cc4],
+      CARGO_COLS = [0xd0703a, 0x3f8f8f, 0xb8423a, 0xd8d0b8, 0x4f6fa0], DRIVE_GLOW = 0x7fd4ff;
+function makeCraftGeo(seed) {
+  let k = 0;
+  const rr = (lo, hi) => lo + (hi - lo) * tHash(seed, k++, 9100) / 4294967296, pick = arr => arr[Math.floor(rr(0, arr.length))];
+  const hull = pick(HULL_COLS), livery = pick(LIVERY), dark = 0x3b4250, parts = [];
+  const L = rr(24, 38), W = rr(5, 9), H = rr(4, 6.5), boxy = rr(0, 1) < 0.45, back = -L / 2;
+  const tube = (rx, ry, len, z, col) => paint(new THREE.CylinderGeometry(1, 1, len, 12).rotateX(Math.PI / 2).scale(rx, ry, 1).translate(0, 0, z), col);
+  if (boxy) {
+    parts.push(paint(new THREE.BoxGeometry(W, H, L * 0.8).translate(0, 0, -L * 0.1), hull),
+               paint(new THREE.BoxGeometry(W * 0.7, H * 0.6, L * 0.2).translate(0, -H * 0.1, L * 0.4), hull),          // nose
+               paint(new THREE.BoxGeometry(W * 1.02, H * 1.02, 1.6).translate(0, 0, rr(-L * 0.3, L * 0.2)), livery));
+  } else {
+    parts.push(paint(new THREE.CapsuleGeometry(H / 2, L - H, 4, 12).rotateX(Math.PI / 2).scale(W / H, 1, 1), hull),
+               tube(W / 2 * 1.03, H / 2 * 1.03, 1.6, rr(-L * 0.3, L * 0.2), livery));
+  }
+  const cargo = Math.floor(rr(0, 4));   // 0 none, 1 containers under, 2 on top, 3 side tanks
+  if (cargo === 1 || cargo === 2) {
+    const n = Math.floor(rr(2, 6)), cw = W * rr(0.7, 1.1), ch = rr(2.2, 3.4), cl = L * 0.6 / n, y = cargo === 1 ? -H / 2 - ch / 2 : H / 2 + ch / 2;
+    for (let i = 0; i < n; i++) parts.push(paint(new THREE.BoxGeometry(cw, ch, cl * 0.9).translate(0, y, -L * 0.3 + (i + 0.5) * cl), pick(CARGO_COLS)));
+  } else if (cargo === 3) {
+    const tr = rr(1.2, 2), tl = L * rr(0.4, 0.6), col = pick(CARGO_COLS);
+    for (const sx of [-1, 1]) parts.push(tube(tr, tr, tl, -L * 0.05, col).translate(sx * (W / 2 + tr), -H * 0.15, 0));
+  }
+  const wings = Math.floor(rr(0, 3));   // 0 none, 1 stubs, 2 swept
+  if (wings) {
+    const span = W + rr(6, 14), sweep = wings === 2 ? 0.45 : 0;
+    for (const sx of [-1, 1]) parts.push(paint(new THREE.BoxGeometry((span - W) / 2 + 1, 0.8, rr(4, 8)).rotateY(sx * sweep)
+      .translate(sx * (span + W) / 4, -H * 0.2, -L * 0.15), wings === 2 ? hull : 0xb7bdc8));
+  }
+  if (rr(0, 1) < 0.5) parts.push(paint(new THREE.BoxGeometry(0.6, rr(3, 5), rr(4, 7)).translate(0, H / 2 + 1.5, back + 4), livery));   // fin
+  const drives = 1 + Math.floor(rr(0, 3)), dr = rr(1.1, 1.8), spread = Math.min(W / 2 - dr, 2.6);
+  for (let i = 0; i < drives; i++) {
+    const x = drives === 1 ? 0 : -spread + 2 * spread * i / (drives - 1);
+    parts.push(tube(dr, dr, 3, back - 1.2, dark).translate(x, 0, 0), tube(dr * 0.8, dr * 0.8, 0.4, back - 2.8, DRIVE_GLOW).translate(x, 0, 0));
+  }
+  return mergeGeometries(parts);
+}
+const CRAFT_GEOS = Array.from({ length: CRAFT_DESIGNS }, (_, i) => makeCraftGeo(i + 1));
+function makeFleet(cap) {
+  const meshes = CRAFT_GEOS.map(g => { const m = new THREE.InstancedMesh(g, craftMat, cap); m.frustumCulled = false; m.count = 0; return m; });
+  return {
+    meshes,
+    begin() { for (const m of meshes) m.count = 0; },
+    put(v, M) { const m = meshes[v % CRAFT_DESIGNS]; m.setMatrixAt(m.count++, M); },
+    end() { for (const m of meshes) m.instanceMatrix.needsUpdate = true; },
+  };
+}
 const gliderGeo = mergeGeometries([
   paint(new THREE.BoxGeometry(18, 0.15, 1.1).translate(0, 0.3, 0.6), 0xf4f4f0),                             // wing
   paint(new THREE.CapsuleGeometry(0.35, 6, 4, 8).rotateX(Math.PI / 2), 0xf4f4f0),                           // fuselage
@@ -2288,10 +2335,10 @@ const gliderGeo = mergeGeometries([
   paint(new THREE.BoxGeometry(0.1, 1.2, 0.8).translate(0, 0.7, -3.5), 0xe05a3a),                            // fin
   paint(new THREE.SphereGeometry(0.33, 8, 6).scale(1, 0.8, 1.8).translate(0, 0.25, 1.8), 0x203040),         // canopy
 ]);
-const cargoMesh = new THREE.InstancedMesh(cargoGeo, craftMat, N_CONVOYS * CONVOY_MAX);
+const cargoFleet = makeFleet(N_CONVOYS * CONVOY_MAX);
 const gliderMesh = new THREE.InstancedMesh(gliderGeo, craftMat, N_THERMALS * 2);
-cargoMesh.frustumCulled = gliderMesh.frustumCulled = false;
-scene.add(cargoMesh, gliderMesh);
+gliderMesh.frustumCulled = false;
+scene.add(...cargoFleet.meshes, gliderMesh);
 
 const groundAt = (a, u) => Math.max(heightAt(a, u), 0);
 const convoys = Array.from({ length: N_CONVOYS }, () => ({ placed: false }));
@@ -2316,12 +2363,12 @@ function placeThermal(t, pa, pu) {
 
 const craftM = new THREE.Matrix4(), craftP = new THREE.Vector3(), craftQ = new THREE.Quaternion(),
       craftQ2 = new THREE.Quaternion(), craftUp = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1), Zv = new THREE.Vector3(0, 0, 1);
-function setCraft(mesh, n, a, u, h, yaw, bank) {
+function setCraft(a, u, h, yaw, bank) {   // returns the instance matrix
   const th = a / R;
   ringPoint(a, u, h, craftP).sub(camPos);
   craftQ.setFromUnitVectors(Yv, craftUp.set(-Math.cos(th), 0, -Math.sin(th))).multiply(craftQ2.setFromAxisAngle(Yv, yaw));
   if (bank) craftQ.multiply(craftQ2.setFromAxisAngle(Zv, bank));
-  mesh.setMatrixAt(n, craftM.compose(craftP, craftQ, ONE));
+  return craftM.compose(craftP, craftQ, ONE);
 }
 // --- Spaceports: four, one per quarter of the ring, hanging off its outer face under the land strip, where
 // ships come and go from open space. Each has an anchor plate, a tapering spindle with warm bands, three
@@ -2361,12 +2408,13 @@ for (const P of PORTS) {
     }
     for (let k = 0; k < 16; k++) if (k % 4) berths.push([y, r, (k + 0.5) * Math.PI / 8]);
   }
-  const docked = new THREE.InstancedMesh(cargoGeo, craftMat, berths.length), S = new THREE.Vector3(30, 30, 30);
+  const docked = makeFleet(berths.length), S = new THREE.Vector3(30, 30, 30);
   berths.forEach(([y, r, ang], n) => {   // nose (+Z) points straight out from the spindle
     craftQ.setFromAxisAngle(Yv, Math.atan2(Math.cos(ang), Math.sin(ang)));
-    docked.setMatrixAt(n, craftM.compose(craftP.set(Math.cos(ang) * (r + 1300), y, Math.sin(ang) * (r + 1300)), craftQ, S));
+    docked.put(tHash(n, PORTS.indexOf(P), 9200), craftM.compose(craftP.set(Math.cos(ang) * (r + 1300), y, Math.sin(ang) * (r + 1300)), craftQ, S));
   });
-  grp.add(docked);
+  docked.end();
+  grp.add(...docked.meshes);
   P.beacon = add(new THREE.SphereGeometry(900, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3020 }), -37800);
   P.chase = [];
   for (let k = 0; k < 12; k++) P.chase.push(add(new THREE.SphereGeometry(300, 12, 8), hullTex.cool, -42000 - 4000 * k));
@@ -2779,9 +2827,8 @@ for (const P of PORTS) for (let i = 0; i < 24; i++) {
   shuttles.push({ g: P, from: [dx * b, dy * b, h], dir: new THREE.Vector3(dx, dy, -rnd(0.5, 2)).normalize(),
                   len: rnd(40000, 120000) * PORT_SCALE, v: rnd(400, 1500) * PORT_SCALE, phase: rnd(0, 2), s: rnd(15, 40) * PORT_SCALE });
 }
-const shuttleMesh = new THREE.InstancedMesh(cargoGeo, craftMat, shuttles.length);
-shuttleMesh.frustumCulled = false;
-scene.add(shuttleMesh);
+const shuttleFleet = makeFleet(shuttles.length);
+scene.add(...shuttleFleet.meshes);
 const shF = new THREE.Vector3(), shX = new THREE.Vector3(), shY = new THREE.Vector3(), shM = new THREE.Matrix4();
 // Nose (+Z) along deck-frame direction (dx, dy, dh), up as near the deck's up as the heading allows.
 const shS = new THREE.Vector3();
@@ -2791,10 +2838,11 @@ function setShuttle(n, g, x, y, h, dx, dy, dh, s = 1) {
   shY.crossVectors(shF, shX);
   craftQ.setFromRotationMatrix(shM.makeBasis(shX, shY, shF));
   deckPoint(g, x, y, h, craftP).sub(camPos);
-  shuttleMesh.setMatrixAt(n, craftM.compose(craftP, craftQ, shS.setScalar(s)));
+  shuttleFleet.put(tHash(n, 0, 9300), craftM.compose(craftP, craftQ, shS.setScalar(s)));
 }
 function updateShuttles(dt) {
   const t = performance.now() / 1000;
+  shuttleFleet.begin();
   shuttles.forEach((c, n) => {
     if (c.from) {
       const w = (t * c.v / c.len + c.phase) % 2, out = (w < 1 ? w : 2 - w) * c.len, sg = w < 1 ? 1 : -1;
@@ -2805,7 +2853,7 @@ function updateShuttles(dt) {
       setShuttle(n, c.g, c.ra * ca, c.rn * sa, c.h, -sg * c.ra * sa, sg * c.rn * ca, 0);
     }
   });
-  shuttleMesh.instanceMatrix.needsUpdate = true;
+  shuttleFleet.end();
 }
 
 const tooFar = (o, pa, pu) => !o.placed || Math.hypot(arcDelta(pa, o.a), pu - o.u) > TRAFFIC_RANGE;
@@ -2814,7 +2862,8 @@ function updateTraffic(dt) {
   const p = mode === 'walk' ? camPos : shipPos;
   const pa = wrapA(Math.atan2(p.z, p.x) * R), pu = p.y;
   let n = 0;
-  for (const c of convoys) {
+  cargoFleet.begin();
+  convoys.forEach((c, ci) => {
     if (tooFar(c, pa, pu)) placeConvoy(c, pa, pu);
     const ca = Math.cos(c.yaw), su = Math.sin(c.yaw);
     c.a = wrapA(c.a + ca * c.speed * dt); c.u += su * c.speed * dt;
@@ -2822,10 +2871,10 @@ function updateTraffic(dt) {
     // Line astern, every other craft stepped 15 m to the side.
     for (let k = 0; k < c.n; k++) {
       const back = k * c.gap, side = k % 2 ? 15 : 0;
-      setCraft(cargoMesh, n++, c.a - ca * back + su * side, c.u - su * back - ca * side, c.h, c.yaw, 0);
+      cargoFleet.put(tHash(ci, k, 9400), setCraft(c.a - ca * back + su * side, c.u - su * back - ca * side, c.h, c.yaw, 0));
     }
-  }
-  cargoMesh.count = n;
+  });
+  cargoFleet.end();
   n = 0;
   for (const t of thermals) {
     if (tooFar(t, pa, pu)) placeThermal(t, pa, pu);
@@ -2834,12 +2883,12 @@ function updateTraffic(dt) {
     for (let k = 0; k < t.n; k++) {
       const ang = t.ang + k * Math.PI, ga = Math.cos(ang), gu = Math.sin(ang);
       // Tangent heading; the centre is on the left when dir = +1, so bank left wing down.
-      setCraft(gliderMesh, n++, t.a + t.r * ga, t.u + t.r * gu, t.h + k * 40, Math.atan2(t.dir * ga, -t.dir * gu), -t.dir * 0.45);
+      gliderMesh.setMatrixAt(n++, setCraft(t.a + t.r * ga, t.u + t.r * gu, t.h + k * 40, Math.atan2(t.dir * ga, -t.dir * gu), -t.dir * 0.45));
     }
   }
   gliderMesh.count = n;
   updateShuttles(dt);
-  cargoMesh.instanceMatrix.needsUpdate = gliderMesh.instanceMatrix.needsUpdate = true;
+  gliderMesh.instanceMatrix.needsUpdate = true;
 }
 
 // --- Multiplayer ---
