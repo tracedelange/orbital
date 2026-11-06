@@ -337,6 +337,7 @@ varying float vLake;     // lake noise: water where it's high
 varying vec3 vUpV;       // local up in view space, for slope
 varying float vSkirt;    // 0 on the surface, above 0 on a skirt face
 varying float vFarm;     // farm-region noise
+varying float vForest;   // forest-patch noise (forestAt() in JS)
 varying float vUrban;    // 1 inside a settlement, fading at its edge
 varying float vFarmNear; // 1 within a few radii of a settlement
 varying vec2 vMega;      // offset from the nearest super city's centre, in metres (x east, y across)
@@ -458,9 +459,9 @@ function tNoise(cx, cy, fx, fy, wrap, seed) {
   const n01 = tGrad(cx, cy + 1, seed, fx, fy - 1), n11 = tGrad(x1, cy + 1, seed, fx - 1, fy - 1);
   return lerp(lerp(n00, n10, wx), lerp(n01, n11, wx), wy);
 }
-function tFbm(a, u, oct, seed) {
+function tFbm(a, u, oct, seed, start = 0) {   // octaves start..oct-1, the first at amplitude 1, as in the shader
   let amp = 1, s = 0;
-  for (let i = 0; i < oct; i++) {
+  for (let i = start; i < oct; i++) {
     const cells = 32 * 2 ** i / TILE0, wrap = ROOTS * 32 * 2 ** i;
     const x = a * cells, y = (u + HW) * cells, cx = Math.floor(x), cy = Math.floor(y);
     s += amp * tNoise(cx % wrap, cy, x - cx, y - cy, wrap, seed + i);
@@ -492,6 +493,9 @@ function terrainAt(a, u) {
   return [lerp(seaFloor, landH, land) + bowlH(u), land > 0.5 && (river < 0.0075 || lake > 0.57)];
 }
 const heightAt = (a, u) => terrainAt(a, u)[0];
+// Forest cover, 0 to 1: patches 2 to 20 km across (noise octaves 2-5), kept off farmland. The terrain shader
+// paints the same mask (vForest, vFarm) dark, and makeBuildingChunk() plants conifers in it.
+const forestAt = (a, u) => smoothstep(tFbm(a, u, 6, 800, 2), 0.15, 0.3) * (1 - smoothstep(tFbm(a, u, 4, 500), 0.3, 0.4));
 // Cold rises toward the walls; colour and vegetation treat cold ground as if it were higher.
 const coldAt = u => smoothstep(Math.abs(u) / HW, 0.35, 0.78);
 
@@ -499,7 +503,7 @@ const coldAt = u => smoothstep(Math.abs(u) / HW, 0.35, 0.78);
 const srgb = (r, g, b) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
 const PALETTE = {
   uSeabed: srgb(0.5, 0.47, 0.36), uSand: srgb(0.86, 0.79, 0.56), uGrass: srgb(0.36, 0.58, 0.22),
-  uForest: srgb(0.14, 0.33, 0.13), uTundra: srgb(0.47, 0.44, 0.33), uRock: srgb(0.46, 0.43, 0.39),
+  uForest: srgb(0.14, 0.33, 0.13), uPine: srgb(0.07, 0.2, 0.08), uTundra: srgb(0.47, 0.44, 0.33), uRock: srgb(0.46, 0.43, 0.39),
   uSnow: srgb(0.95, 0.96, 0.98), uIce: srgb(0.82, 0.88, 0.93), uRiver: srgb(0.12, 0.33, 0.45),
 };
 
@@ -538,6 +542,7 @@ function patchTiles(shader) {
       // levels agree; each level adds at most one octave, and smaller ones matter less.
       vD = tFbm(aIdx, position.xy, 5, min(int(aIdx.z) + 2, 11), 400u);
       vFarm = tFbm(aIdx, position.xy, 0, min(int(aIdx.z) + 2, 4), 500u);
+      vForest = tFbm(aIdx, position.xy, 2, min(int(aIdx.z) + 2, 6), 800u);
       latticeCoord(aIdx, position.xy, 8, vFieldBase, vFieldLf);   // octave 8: 295 m cells
     #endif
     vH = hs; vSkirt = position.z; vT = abs(tU) / ${f1(HW)}; vN = tN; vRiver = tR; vLake = tL;
@@ -582,6 +587,7 @@ function patchTiles(shader) {
     varying vec3 vUpV;
     varying float vSkirt;
     varying float vFarm;
+    varying float vForest;
     varying float vUrban;
     varying float vFarmNear;
     varying vec2 vMega;
@@ -626,6 +632,10 @@ function patchTiles(shader) {
       // Farmland and settlements need warm, flat, dry lowland.
       float settle = smoothstep(10.0, 30.0, h) * (1.0 - smoothstep(1200.0, 1500.0, h)) * (1.0 - smoothstep(0.25, 0.4, cold))
                    * smoothstep(0.93, 0.98, slope) * (1.0 - wet);
+      // Forest: dark canopy where forestAt() is, on dry ground from 20 m up to the tundra line, off farmland and towns.
+      float forest = smoothstep(0.15, 0.3, vForest) * (1.0 - smoothstep(0.3, 0.4, vFarm)) * (1.0 - vFarmNear)
+                   * smoothstep(20.0, 40.0, h) * (1.0 - smoothstep(1500.0, 1800.0, h + cold * 3500.0)) * (1.0 - wet);
+      c = mix(c, uPine * (0.85 + 0.3 * d), forest);
       float onLine; uint hc;
       float farm = max(smoothstep(0.3, 0.4, vFarm), vFarmNear) * settle;
       c = mix(c, cellPattern(1.0, 600u, CROPS, vec3(0.16, 0.30, 0.12), 0.03, onLine, hc), farm);
@@ -1003,7 +1013,8 @@ function rebuildShrubs(a, u) {
 // open grass. Buildings come in four soft-coloured forms (stepped terraces with planted tops, slim towers
 // with garden crowns, domes) turned to a hashed angle; city cores grow towers, outskirts grow domes.
 // Windows glow on the night side. Each form is its own instanced mesh; the shape is in unit size.
-const BCHUNK = 1000, MAX_BUILDINGS = 20000, MAX_TREES = 60000, BUILD_ALT = 30000;
+const BCHUNK = 1000, MAX_BUILDINGS = 20000, MAX_TREES = 60000, MAX_PINES = 100000, BUILD_ALT = 30000;
+const FOREST_SP = 35;   // forest grid spacing, metres
 const NBCHUNK_A = Math.floor(C / BCHUNK);
 const BUILD = [
   { spacing: 70, fp: [24, 44], density: 0.5 },   // city
@@ -1035,9 +1046,16 @@ const treeGeo = mergeGeometries([
   paint(new THREE.CylinderGeometry(0.05, 0.08, 0.45, 6).translate(0, 0.22, 0).toNonIndexed(), 0x6b4f35),  // icosahedron is non-indexed
   paint(new THREE.IcosahedronGeometry(0.34, 1).scale(1, 0.9, 1).translate(0, 0.66, 0), 0x4e7f34),
 ]);
+// Conifer for the forests: a short trunk under two stacked cones, about 20 triangles, since forests hold many.
+const pineGeo = mergeGeometries([
+  paint(new THREE.CylinderGeometry(0.04, 0.06, 0.2, 4, 1, true).translate(0, 0.1, 0), 0x5a4330),
+  paint(new THREE.ConeGeometry(0.5, 0.6, 6, 1, true).translate(0, 0.45, 0), 0x2f5a2a),
+  paint(new THREE.ConeGeometry(0.36, 0.5, 6, 1, true).translate(0, 0.75, 0), 0x2f5a2a),
+].map(g => g.toNonIndexed()));
 const bMeshes = {};
 for (const [kind, geo] of Object.entries(FORMS)) bMeshes[kind] = new THREE.InstancedMesh(geo, buildingMat, MAX_BUILDINGS);
 bMeshes.tree = new THREE.InstancedMesh(treeGeo, withDay(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true }), 'local'), MAX_TREES);
+bMeshes.pine = new THREE.InstancedMesh(pineGeo, bMeshes.tree.material, MAX_PINES);
 for (const m of Object.values(bMeshes)) { m.frustumCulled = false; m.count = 0; scene.add(m); }
 const bChunks = new Map();
 const bOrigin = new THREE.Vector3();
@@ -1059,8 +1077,21 @@ function makeBuildingChunk(ia, iu) {
       return !P.road && b.kind !== 'tower' && (!P.park || b.kind === 'tree');
     }));
   }
+  // Forest: conifers on a jittered grid, denser toward the middle of a patch, clear of towns and their farms.
+  // The mask is checked first since it's cheap; only cells that keep a tree pay for terrainAt().
+  for (let a = Math.ceil(a0 / FOREST_SP) * FOREST_SP; a < a0 + BCHUNK; a += FOREST_SP) for (let u = Math.ceil(u0 / FOREST_SP) * FOREST_SP; u < u0 + BCHUNK; u += FOREST_SP) {
+    const h = tHash(Math.round(a / FOREST_SP), Math.round(u / FOREST_SP), 5000);
+    if ((h & 1023) / 1023 >= 0.85 * forestAt(a, u)) continue;
+    const ta = a + FOREST_SP * 0.8 * (((h >>> 10) & 255) / 255 - 0.5), tu = u + FOREST_SP * 0.8 * (((h >>> 18) & 255) / 255 - 0.5);
+    if (towns.some(s => townQ(s, ta, tu) < 2.5)) continue;
+    const [g, wet] = ringGround(ta, tu);
+    if (wet || g < 20 || g + coldAt(tu) * 3500 > 1700) continue;
+    const sz = 14 + 16 * (((h >>> 26) & 63) / 63);
+    list.push({ kind: 'pine', a: ta, u: tu, g, w: sz * 0.45, d: sz * 0.45, height: sz, rot: h & 7, color: PINE_SHADE[(h >>> 8) & 3] });
+  }
   return list;
 }
+const PINE_SHADE = [srgb(0.8, 0.85, 0.8), srgb(1, 1, 1), srgb(0.7, 0.8, 0.65), srgb(0.9, 0.95, 0.8)];
 const TREE_SHADE = [srgb(0.8, 0.8, 0.8), srgb(0.95, 0.95, 0.95), srgb(0.7, 0.75, 0.6), srgb(0.85, 0.9, 0.75)];
 const ringGround = (a, u) => { const [g, wet] = terrainAt(a, u); return [g, wet || g < 5]; };
 
@@ -1122,10 +1153,12 @@ const bm = new THREE.Matrix4(), bq = new THREE.Quaternion(), bq2 = new THREE.Qua
       bEast = new THREE.Vector3(), bUp = new THREE.Vector3(), bSouth = new THREE.Vector3(), bBasis = new THREE.Matrix4();
 function rebuildBuildings(a, u) {
   ringPoint(a, u, 0, bOrigin);
-  const n = { terrace: 0, tower: 0, dome: 0, tree: 0 };
-  for (const c of bChunks.values()) for (const b of c.list) {
+  const n = { terrace: 0, tower: 0, dome: 0, tree: 0, pine: 0 }, cap = { tree: MAX_TREES, pine: MAX_PINES };
+  // Nearest chunks first, so if a cap is reached it's the far trees that go.
+  const ca = a / BCHUNK, cu = u / BCHUNK, cd = c => { let d = c.ia + 0.5 - ca; d -= Math.round(d / NBCHUNK_A) * NBCHUNK_A; return Math.hypot(d, c.iu + 0.5 - cu); };
+  for (const c of [...bChunks.values()].sort((x, y) => cd(x) - cd(y))) for (const b of c.list) {
     const mesh = bMeshes[b.kind];
-    if (n[b.kind] >= (b.kind === 'tree' ? MAX_TREES : MAX_BUILDINGS)) continue;
+    if (n[b.kind] >= (cap[b.kind] ?? MAX_BUILDINGS)) continue;
     const th = b.a / R;
     ringPoint(b.a, b.u, b.g - 1, bp).sub(bOrigin);   // sunk a metre so slopes don't leave gaps
     // Aligned with the ring: x east, y toward the axis, z = x × y; then turned about y.
