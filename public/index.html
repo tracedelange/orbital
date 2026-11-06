@@ -1160,7 +1160,7 @@ const hullMat = withDay(new THREE.MeshStandardMaterial({ color: SHIP_COLORS[ship
 {
   const darkMat = withDay(new THREE.MeshStandardMaterial({ color: 0x3b4250, metalness: 0.6, roughness: 0.4 }), 'local');
   const FUSE = [[0, -7.5], [0.45, -6.2], [0.85, -4], [1.05, -1], [1.05, 3], [0.8, 5.8], [0, 6.2]];
-  const fuselage = new THREE.Mesh(new THREE.LatheGeometry(FUSE.map(([r, z]) => new THREE.Vector2(r, -z)), 20)
+  const fuselage = new THREE.Mesh(new THREE.LatheGeometry(FUSE.map(([r, z]) => new THREE.Vector2(r, -z)).reverse(), 20)   // lathe profiles run up (+y) to face outward
     .rotateX(-Math.PI / 2).scale(1, 0.75, 1), hullMat);
   // Delta wing in plan view (x, z), extruded 0.25 m thick.
   const plan = new THREE.Shape([[0, -3.5], [TIP_X + 0.3, 4], [TIP_X, 5], [-TIP_X, 5], [-TIP_X - 0.3, 4]].map(([x, z]) => new THREE.Vector2(x, z)));
