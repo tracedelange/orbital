@@ -3155,7 +3155,10 @@ function openChat() {
 }
 chatIn.addEventListener('keydown', e => {
   if (e.key === 'Enter' && chatIn.value.trim()) ws.send(JSON.stringify({ type: 'chat', text: chatIn.value }));
-  if (e.key === 'Enter' || e.key === 'Escape') { chatIn.value = ''; chatIn.hidden = true; chatIn.blur(); }
+  if (e.key === 'Enter' || e.key === 'Escape') {
+    chatIn.value = ''; chatIn.hidden = true; chatIn.blur();
+    try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch {}   // the key press counts as the gesture; if refused, a click locks
+  }
 });
 
 function goTo(p) {
